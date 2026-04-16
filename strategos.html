@@ -8483,9 +8483,24 @@
                 if (pos) {
                     let [r, c] = pos;
                     let units = game.phase === 'PLAN_P1' ? game.p1Units : game.p2Units;
-                    let unit = units.find(u => u.r === r && u.c === c && !u.ordered);
+                    let unit = units.find(u => u.r === r && u.c === c);
 
                     if (!game.planStep && unit) {
+                        // Clicking an already-ordered unit resets its orders
+                        if (unit.ordered) {
+                            unit.plannedR = null;
+                            unit.plannedC = null;
+                            unit.plannedAtk = null;
+                            unit.plannedTrap = null;
+                            unit.plannedBeacon = null;
+                            unit.plannedAid = null;
+                            unit.plannedStealth = false;
+                            unit.plannedShadow = null;
+                            unit.plannedChannel = false;
+                            unit.plannedRain = null;
+                            unit.plannedBlink = null;
+                            unit.ordered = false;
+                        }
                         game.selectedUnit = unit;
                         game.planStep = initialPlanStepFor(unit);
                     } else if (game.planStep === 'MOVE' && game.selectedUnit) {
