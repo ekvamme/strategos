@@ -7986,6 +7986,27 @@
                     }
                 }
 
+                // Reconnection overlay — drawn on top of everything when connection is lost
+                if (game._reconnecting) {
+                    this.ctx.save();
+                    this.ctx.fillStyle = 'rgba(0,0,0,0.7)';
+                    this.ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+                    let elapsed = Date.now() - game._reconnectStart;
+                    let remaining = Math.ceil((30000 - elapsed) / 1000);
+                    let pulse = 0.6 + 0.4 * Math.sin(performance.now() / 400);
+                    this.ctx.fillStyle = `rgba(255,200,100,${pulse})`;
+                    this.ctx.font = 'bold 24px Arial';
+                    this.ctx.textAlign = 'center';
+                    this.ctx.fillText('Connection Lost', CANVAS_W / 2, CANVAS_H / 2 - 40);
+                    this.ctx.fillStyle = '#ccc';
+                    this.ctx.font = '16px Arial';
+                    this.ctx.fillText(`Reconnecting... (${remaining}s)`, CANVAS_W / 2, CANVAS_H / 2);
+                    this.ctx.fillStyle = '#888';
+                    this.ctx.font = '13px Arial';
+                    this.ctx.fillText('Game state preserved — waiting for connection', CANVAS_W / 2, CANVAS_H / 2 + 30);
+                    this.ctx.restore();
+                }
+
                 // Amplifier badge hover tooltip — drawn last so it's on top
                 if (this._badgeHitAreas && this._badgeHitAreas.length > 0
                     && game.phase !== 'MENU' && game.phase !== 'TUTORIAL') {
@@ -8638,20 +8659,26 @@
             });
             game.peer.on('connection', (conn) => {
                 game.conn = conn;
-                game.remoteStatus = 'Opponent connected! Setting up match...';
                 wireConnection(game, conn, /*isHost*/true);
                 conn.on('open', () => {
-                    // Seed RNG and tell guest to match
-                    let seed = (Math.random() * 0xFFFFFFFF) >>> 0;
-                    game.rngSeed = seed;
-                    game.rngState = seed;
-                    conn.send({t: 'hello', seed: seed});
-                    // Advance to BUDGET (host picks budget)
-                    game.initBoard();
-                    game.phase = 'BUDGET';
-                    game.budget = 6;
-                    game.cullingTurn = 10;
-                    // Host will broadcast state once budget is confirmed.
+                    if (game._reconnecting) {
+                        // Reconnection — guest came back mid-game
+                        game._reconnecting = false;
+                        game.remoteStatus = 'Opponent reconnected!';
+                        // Send current game state so guest resyncs
+                        try { conn.send({t: 'resync', phase: game.phase}); } catch(e) {}
+                    } else {
+                        // Fresh connection — start new match
+                        game.remoteStatus = 'Opponent connected! Setting up match...';
+                        let seed = (Math.random() * 0xFFFFFFFF) >>> 0;
+                        game.rngSeed = seed;
+                        game.rngState = seed;
+                        conn.send({t: 'hello', seed: seed});
+                        game.initBoard();
+                        game.phase = 'BUDGET';
+                        game.budget = 6;
+                        game.cullingTurn = 10;
+                    }
                 });
             });
         }
@@ -8762,11 +8789,60 @@
         function wireConnection(game, conn, isHost) {
             conn.on('data', (msg) => { handleRemoteMessage(game, msg, isHost); });
             conn.on('close', () => {
-                game.remoteStatus = 'Opponent disconnected.';
-                // Fall back to menu
-                if (game.phase !== 'MENU' && game.phase !== 'GAME_OVER') {
-                    game.phase = 'MENU';
-                }
+                // Don't bail to menu — try to reconnect for up to 30 seconds.
+                if (game.phase === 'MENU' || game.phase === 'GAME_OVER') return;
+                game._reconnecting = true;
+                game._reconnectStart = Date.now();
+                game._reconnectPhase = game.phase; // remember where we were
+                game.remoteStatus = 'Connection lost — reconnecting...';
+
+                let attempt = () => {
+                    if (!game._reconnecting) return;
+                    let elapsed = Date.now() - game._reconnectStart;
+                    if (elapsed > 30000) {
+                        // Give up after 30 seconds
+                        game._reconnecting = false;
+                        game.remoteStatus = 'Reconnection failed.';
+                        game.phase = 'MENU';
+                        return;
+                    }
+                    game.remoteStatus = `Connection lost — reconnecting (${Math.ceil((30000 - elapsed) / 1000)}s)...`;
+
+                    if (isHost) {
+                        // Host: peer ID is still registered — wait for guest to reconnect.
+                        // The peer.on('connection') handler in remoteStartHost will
+                        // pick up the new connection automatically.
+                        setTimeout(attempt, 2000);
+                    } else {
+                        // Guest: try to re-dial the host
+                        if (game.peer && !game.peer.destroyed) {
+                            let target = 'stg-' + game.joinCode;
+                            try {
+                                let newConn = game.peer.connect(target, {reliable: true});
+                                newConn.on('open', () => {
+                                    game.conn = newConn;
+                                    game._reconnecting = false;
+                                    game.remoteStatus = 'Reconnected!';
+                                    wireConnection(game, newConn, false);
+                                    // Send a resync request so host knows we're back
+                                    try { newConn.send({t: 'reconnected'}); } catch(e) {}
+                                });
+                                newConn.on('error', () => {
+                                    // Retry on next tick
+                                    setTimeout(attempt, 3000);
+                                });
+                            } catch(e) {
+                                setTimeout(attempt, 3000);
+                            }
+                        } else {
+                            // Peer destroyed — can't reconnect
+                            game._reconnecting = false;
+                            game.remoteStatus = 'Connection lost.';
+                            game.phase = 'MENU';
+                        }
+                    }
+                };
+                setTimeout(attempt, 1000);
             });
             conn.on('error', (err) => {
                 game.remoteStatus = 'Connection error: ' + err;
