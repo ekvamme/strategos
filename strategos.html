@@ -49,6 +49,14 @@
 
     <!-- PeerJS: WebRTC peer-to-peer for Remote PvP (loaded from CDN) -->
     <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+    <!-- Fallback: if PeerJS CDN fails, try newer version -->
+    <script>
+        if (typeof Peer === 'undefined') {
+            let s = document.createElement('script');
+            s.src = 'https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js';
+            document.head.appendChild(s);
+        }
+    </script>
 
     <script>
         // ===== CONSTANTS & CONFIG =====
@@ -8560,30 +8568,32 @@
         // STUN plus the free OpenRelay TURN cluster gets the success rate from
         // ~70% to well over 95%.
         const PEER_CONFIG = {
-            debug: 1,
+            debug: 2,  // bump debug for troubleshooting
             config: {
                 iceServers: [
                     { urls: 'stun:stun.l.google.com:19302' },
                     { urls: 'stun:stun1.l.google.com:19302' },
-                    { urls: 'stun:stun2.l.google.com:19302' },
-                    { urls: 'stun:global.stun.twilio.com:3478' },
-                    // OpenRelay — free public TURN, used only when direct
-                    // peer-to-peer ICE fails (symmetric NAT, strict firewalls).
-                    // Credentials are public by design on the OpenRelay project.
+                    { urls: 'stun:stun.cloudflare.com:3478' },
+                    // Metered.ca free TURN — public credentials
                     {
-                        urls: 'turn:openrelay.metered.ca:80',
-                        username: 'openrelayproject',
-                        credential: 'openrelayproject'
+                        urls: 'turn:a.relay.metered.ca:80',
+                        username: 'e8dd65b92f416ccc0a6717e0',
+                        credential: '3RoO/VBmPKBp7K1t'
                     },
                     {
-                        urls: 'turn:openrelay.metered.ca:443',
-                        username: 'openrelayproject',
-                        credential: 'openrelayproject'
+                        urls: 'turn:a.relay.metered.ca:80?transport=tcp',
+                        username: 'e8dd65b92f416ccc0a6717e0',
+                        credential: '3RoO/VBmPKBp7K1t'
                     },
                     {
-                        urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-                        username: 'openrelayproject',
-                        credential: 'openrelayproject'
+                        urls: 'turn:a.relay.metered.ca:443',
+                        username: 'e8dd65b92f416ccc0a6717e0',
+                        credential: '3RoO/VBmPKBp7K1t'
+                    },
+                    {
+                        urls: 'turn:a.relay.metered.ca:443?transport=tcp',
+                        username: 'e8dd65b92f416ccc0a6717e0',
+                        credential: '3RoO/VBmPKBp7K1t'
                     }
                 ],
                 iceCandidatePoolSize: 4
