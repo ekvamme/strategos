@@ -686,7 +686,7 @@
                 if (dmg < 1) dmg = 1;
                 tgt.hp -= dmg;
                 // Record for floating damage number in the action animation
-                this.recordDamage(tgt, dmg, 'dmg');
+                this.recordDamage(tgt, dmg, 'dmg', att, damageType);
                 // Combat log entry
                 if (this.combatLog) {
                     let pName = att.player === 1 ? 'P1' : 'P2';
@@ -806,10 +806,16 @@
             // Log a damage event so drawActionAnim can float a number above
             // the hit unit during the attack window. `kind` tunes color:
             // 'dmg' for combat, 'cull' for the culling attrition tick.
-            recordDamage(unit, amount, kind) {
+            recordDamage(unit, amount, kind, attacker, damageType) {
                 if (!this.pendingDamages) this.pendingDamages = [];
                 if (amount <= 0 || !unit) return;
-                this.pendingDamages.push({ unit, amount, kind: kind || 'dmg' });
+                this.pendingDamages.push({
+                    unit, amount, kind: kind || 'dmg',
+                    attacker: attacker || null,
+                    damageType: damageType || null,
+                    targetType: unit.type,
+                    targetHpAfter: unit.hp
+                });
             }
 
             isInPaladinAura(target) {
@@ -2046,18 +2052,32 @@
                 let dmgMap = new Map();
                 for (let d of (this.pendingDamages || [])) {
                     let prev = dmgMap.get(d.unit);
-                    if (!prev) dmgMap.set(d.unit, { unit: d.unit, amount: 0, kind: d.kind });
+                    if (!prev) dmgMap.set(d.unit, {
+                        unit: d.unit, amount: 0, kind: d.kind, hits: []
+                    });
                     let e = dmgMap.get(d.unit);
                     e.amount += d.amount;
-                    if (d.kind === 'dmg') e.kind = 'dmg'; // combat outranks cull label
+                    if (d.kind === 'dmg') e.kind = 'dmg';
+                    e.hits.push({
+                        amount: d.amount,
+                        attacker: d.attacker ? d.attacker.type : null,
+                        attackerPlayer: d.attacker ? d.attacker.player : null,
+                        attackerUnit: d.attacker || null,
+                        damageType: d.damageType,
+                        kind: d.kind
+                    });
                 }
                 let damages = [];
                 for (let e of dmgMap.values()) {
-                    // Anchor the floating number to where the unit ends the turn.
-                    // Dead units stay at their planned tile; survivors are at u.r/c.
                     let r = e.unit.r != null ? e.unit.r : (e.unit.plannedR != null ? e.unit.plannedR : 0);
                     let c = e.unit.c != null ? e.unit.c : (e.unit.plannedC != null ? e.unit.plannedC : 0);
-                    damages.push({ r, c, amount: e.amount, kind: e.kind });
+                    let targetType = e.unit.type;
+                    let targetHp = e.unit.hp;
+                    let targetMaxHp = e.unit.maxHp;
+                    let dead = e.unit.hp <= 0;
+                    let targetPlayer = e.unit.player;
+                    damages.push({ r, c, amount: e.amount, kind: e.kind,
+                        targetType, targetPlayer, targetHp, targetMaxHp, dead, hits: e.hits });
                 }
                 this.pendingDamages = [];
 
@@ -2976,16 +2996,16 @@
                 // horizontally. Drawn on top of everything else.
                 if (u._activeSynergies && u._activeSynergies.length > 0) {
                     const BADGES = {
-                        HighGround:     {glyph: '⇑',  color: '#9af0ff', title: 'High Ground (+1 range)'},
-                        Volley:         {glyph: '⇶', color: '#ffd090', title: 'Volley'},
-                        Accuracy:       {glyph: '◎',  color: '#ffe74c', title: 'Accuracy'},
-                        SteadyAim:      {glyph: '✦',  color: '#b0f0ff', title: 'Steady Aim'},
-                        AnvilHammer:    {glyph: '⚒',  color: '#ff9a50', title: 'Anvil & Hammer'},
-                        FlameArrow:     {glyph: '🔥', color: '#ff7a30', title: 'Flame Arrow'},
-                        LastStand:      {glyph: '✚',  color: '#e0e0ff', title: 'Last Stand'},
-                        Vanguard:       {glyph: '➤',  color: '#80ff80', title: 'Vanguard'},
-                        ArcingFirebolt: {glyph: '✺',  color: '#ff60a0', title: 'Arcing Firebolt'},
-                        FocusedChan:    {glyph: '◈',  color: '#a080ff', title: 'Focused Channeling'},
+                        HighGround:     {glyph: '⇑',  color: '#9af0ff', title: 'High Ground', desc: 'Back-row Archer gets +1 attack range'},
+                        Volley:         {glyph: '⇶', color: '#ffd090', title: 'Volley', desc: '2 Archers targeting the same tile — both deal +2 dmg'},
+                        Accuracy:       {glyph: '◎',  color: '#ffe74c', title: 'Accuracy', desc: 'Stationary Archer repeating the same target — +1 dmg per stack'},
+                        SteadyAim:      {glyph: '✦',  color: '#b0f0ff', title: 'Steady Aim', desc: 'Archer with friendly Squire directly in front — +2 Pierce dmg'},
+                        AnvilHammer:    {glyph: '⚒',  color: '#ff9a50', title: 'Anvil & Hammer', desc: 'Archer targets a tile adjacent to friendly Squire — +1 Pierce dmg'},
+                        FlameArrow:     {glyph: '🔥', color: '#ff7a30', title: 'Flame Arrow', desc: 'Archer and Adept target the same tile — arrow deals Magic dmg instead'},
+                        LastStand:      {glyph: '✚',  color: '#e0e0ff', title: 'Last Stand', desc: 'Isolated Squire with no adjacent allies — +3 Melee defense'},
+                        Vanguard:       {glyph: '➤',  color: '#80ff80', title: 'Vanguard', desc: 'Squire scored a kill last turn — +1 movement this turn'},
+                        ArcingFirebolt: {glyph: '✺',  color: '#ff60a0', title: 'Arcing Firebolt', desc: '2+ magic users targeting the same tile — bolts arc to adjacent enemies'},
+                        FocusedChan:    {glyph: '◈',  color: '#a080ff', title: 'Focused Channeling', desc: 'Stationary Adept — +1 Magic dmg per turn held still'},
                     };
                     let shown = [];
                     for (let s of u._activeSynergies) {
@@ -3007,9 +3027,11 @@
                     let by = sy - 2;
                     for (let i = 0; i < shown.length; i++) {
                         let bx = bx0 + i * (BADGE_SIZE + 2);
+                        let bcx = bx + BADGE_SIZE / 2;
+                        let bcy = by + BADGE_SIZE / 2;
                         this.ctx.fillStyle = 'rgba(0,0,0,0.7)';
                         this.ctx.beginPath();
-                        this.ctx.arc(bx + BADGE_SIZE / 2, by + BADGE_SIZE / 2, BADGE_SIZE / 2 + 1, 0, Math.PI * 2);
+                        this.ctx.arc(bcx, bcy, BADGE_SIZE / 2 + 1, 0, Math.PI * 2);
                         this.ctx.fill();
                         this.ctx.strokeStyle = shown[i].color;
                         this.ctx.lineWidth = 1;
@@ -3018,7 +3040,14 @@
                         this.ctx.font = 'bold 10px Arial';
                         this.ctx.textAlign = 'center';
                         this.ctx.textBaseline = 'middle';
-                        this.ctx.fillText(shown[i].glyph, bx + BADGE_SIZE / 2, by + BADGE_SIZE / 2 + 1);
+                        this.ctx.fillText(shown[i].glyph, bcx, bcy + 1);
+                        // Register for hover hit-testing
+                        if (!this._badgeHitAreas) this._badgeHitAreas = [];
+                        this._badgeHitAreas.push({
+                            x: bcx, y: bcy, r: BADGE_SIZE / 2 + 2,
+                            title: shown[i].title, desc: shown[i].desc,
+                            color: shown[i].color, glyph: shown[i].glyph
+                        });
                     }
                     this.ctx.textBaseline = 'alphabetic';
                 }
@@ -3480,37 +3509,195 @@
                     this.drawAttackEffects(game, anim, flashA);
                 }
 
-                // Floating damage numbers: rise from the hit unit for 2s,
-                // fading out over the last 40%. Triggered at the attack
-                // window start (elapsed ≈ 0.45 * duration ≈ 1350ms), so the
-                // 2s float completes just before ACTION_RESOLVE ends (3000ms).
+                // Floating damage numbers during animation, then persistent
+                // markers when paused for hover inspection.
                 if (anim.damages && anim.damages.length) {
-                    const FLOAT_START = anim.duration * 0.45;
-                    const FLOAT_DUR = 2000;
-                    const FLOAT_RISE = 38; // pixels the number climbs
-                    for (let d of anim.damages) {
-                        let dt = elapsed - FLOAT_START;
-                        if (dt < 0 || dt > FLOAT_DUR) continue;
-                        let p = dt / FLOAT_DUR;                    // 0 → 1
-                        let eased = 1 - Math.pow(1 - p, 2);        // ease-out rise
-                        let alpha = p < 0.6 ? 1 : Math.max(0, 1 - (p - 0.6) / 0.4);
-                        let [dx, dy] = this.isoCenter(d.r, d.c);
-                        dy -= 22;                                  // anchor above sprite head
-                        dy -= FLOAT_RISE * eased;
-                        let fill = d.kind === 'cull' ? '#ff6a6a' : '#ffd84a';
-                        let stroke = '#000';
-                        let txt = '-' + d.amount;
+                    if (anim.paused) {
+                        // PAUSED STATE: draw persistent markers at final positions.
+                        // Hovering a marker shows a tooltip with attack details.
+                        let hoveredDmg = null;
+                        for (let d of anim.damages) {
+                            let [dx, dy] = this.isoCenter(d.r, d.c);
+                            dy -= 60; // float position (at top of rise)
+                            let fill = d.kind === 'cull' ? '#ff6a6a' : '#ffd84a';
+                            let txt = '-' + d.amount;
+                            // Draw marker
+                            this.ctx.save();
+                            this.ctx.font = 'bold 20px Arial';
+                            this.ctx.textAlign = 'center';
+                            this.ctx.textBaseline = 'middle';
+                            this.ctx.lineWidth = 4;
+                            this.ctx.strokeStyle = '#000';
+                            this.ctx.strokeText(txt, dx, dy);
+                            this.ctx.fillStyle = fill;
+                            this.ctx.fillText(txt, dx, dy);
+                            this.ctx.restore();
+                            // Hit test for hover
+                            let dist = Math.sqrt((mouseCanvasX - dx) ** 2 + (mouseCanvasY - dy) ** 2);
+                            if (dist < 28) hoveredDmg = { d, dx, dy };
+                        }
+                        // "Click to continue" hint
                         this.ctx.save();
-                        this.ctx.globalAlpha = alpha;
-                        this.ctx.font = 'bold 20px Arial';
+                        this.ctx.fillStyle = 'rgba(200,200,200,0.8)';
+                        this.ctx.font = '13px Arial';
                         this.ctx.textAlign = 'center';
-                        this.ctx.textBaseline = 'middle';
-                        this.ctx.lineWidth = 4;
-                        this.ctx.strokeStyle = stroke;
-                        this.ctx.strokeText(txt, dx, dy);
-                        this.ctx.fillStyle = fill;
-                        this.ctx.fillText(txt, dx, dy);
+                        this.ctx.fillText('Hover damage numbers for details · Click or press any key to continue', CANVAS_W / 2, CANVAS_H - 12);
                         this.ctx.restore();
+                        // Highlight attackers when hovering a damage marker
+                        if (hoveredDmg) {
+                            let pulse = 0.6 + 0.4 * Math.sin(performance.now() / 200);
+                            for (let h of (hoveredDmg.d.hits || [])) {
+                                if (!h.attackerUnit || h.kind === 'cull') continue;
+                                let au = h.attackerUnit;
+                                let ar = au.r != null ? au.r : (au.plannedR != null ? au.plannedR : null);
+                                let ac = au.c != null ? au.c : (au.plannedC != null ? au.plannedC : null);
+                                if (ar == null || ac == null) continue;
+                                let [ax, ay] = this.isoCenter(ar, ac);
+                                let color = au.player === 1 ? P1_COLOR : P2_COLOR;
+                                // Ghost sprite for dead attackers
+                                if (au.hp <= 0) {
+                                    let sprite = UNIT_SPRITES[au.type + '_' + au.player];
+                                    if (sprite && sprite.complete && sprite.naturalWidth > 0) {
+                                        let [sw, sh] = spriteSize(au.type);
+                                        let gx = ax - sw / 2;
+                                        let gy = ay - sh + 6;
+                                        this.ctx.save();
+                                        this.ctx.globalAlpha = 0.4 + 0.1 * Math.sin(performance.now() / 400);
+                                        this.ctx.filter = 'grayscale(1) brightness(1.3)';
+                                        this.ctx.drawImage(sprite, gx, gy, sw, sh);
+                                        this.ctx.filter = 'none';
+                                        this.ctx.restore();
+                                    }
+                                }
+                                // Glowing ring around attacker
+                                this.ctx.save();
+                                this.ctx.strokeStyle = color;
+                                this.ctx.lineWidth = 3;
+                                this.ctx.globalAlpha = pulse;
+                                this.ctx.beginPath();
+                                this.ctx.ellipse(ax, ay - 10, 24, 16, 0, 0, Math.PI * 2);
+                                this.ctx.stroke();
+                                // Outer glow
+                                this.ctx.strokeStyle = color;
+                                this.ctx.lineWidth = 6;
+                                this.ctx.globalAlpha = pulse * 0.3;
+                                this.ctx.beginPath();
+                                this.ctx.ellipse(ax, ay - 10, 28, 20, 0, 0, Math.PI * 2);
+                                this.ctx.stroke();
+                                this.ctx.restore();
+                                // Label above attacker
+                                this.ctx.save();
+                                this.ctx.fillStyle = color;
+                                this.ctx.font = 'bold 11px Arial';
+                                this.ctx.textAlign = 'center';
+                                this.ctx.fillText(au.type, ax, ay - 42);
+                                this.ctx.restore();
+                            }
+                            // Also highlight the target tile
+                            let [tx, ty] = this.isoCenter(hoveredDmg.d.r, hoveredDmg.d.c);
+                            this.ctx.save();
+                            this.ctx.strokeStyle = '#ffd84a';
+                            this.ctx.lineWidth = 2;
+                            this.ctx.globalAlpha = pulse;
+                            this.ctx.beginPath();
+                            this.ctx.moveTo(tx, ty - ISO_TH / 2);
+                            this.ctx.lineTo(tx + ISO_TW / 2, ty);
+                            this.ctx.lineTo(tx, ty + ISO_TH / 2);
+                            this.ctx.lineTo(tx - ISO_TW / 2, ty);
+                            this.ctx.closePath();
+                            this.ctx.stroke();
+                            this.ctx.restore();
+                            // Ghost sprite for dead units at the tile where they fell
+                            if (hoveredDmg.d.dead) {
+                                let gType = hoveredDmg.d.targetType;
+                                let gPlayer = hoveredDmg.d.targetPlayer;
+                                let sprite = UNIT_SPRITES[gType + '_' + gPlayer];
+                                if (sprite && sprite.complete && sprite.naturalWidth > 0) {
+                                    let [sw, sh] = spriteSize(gType);
+                                    let gx = tx - sw / 2;
+                                    let gy = ty - sh + 6;
+                                    this.ctx.save();
+                                    this.ctx.globalAlpha = 0.4 + 0.1 * Math.sin(performance.now() / 400);
+                                    this.ctx.filter = 'grayscale(1) brightness(1.3)';
+                                    this.ctx.drawImage(sprite, gx, gy, sw, sh);
+                                    this.ctx.filter = 'none';
+                                    this.ctx.restore();
+                                }
+                            }
+                        }
+                        // Draw tooltip for hovered marker
+                        if (hoveredDmg) {
+                            let { d, dx, dy } = hoveredDmg;
+                            let lines = [];
+                            if (d.targetType) {
+                                let hpTxt = d.dead ? 'KILLED' : `${d.targetHp}/${d.targetMaxHp} HP`;
+                                lines.push(`${d.targetType} takes ${d.amount} total dmg → ${hpTxt}`);
+                            }
+                            for (let h of (d.hits || [])) {
+                                if (h.kind === 'cull') {
+                                    lines.push(`  Culling: −${h.amount}`);
+                                } else {
+                                    let dmgLabel = {P:'Pierce', Me:'Melee', Ex:'Explosive', Ma:'Magic'}[h.damageType] || h.damageType || '?';
+                                    let src = h.attacker || '?';
+                                    let pLabel = h.attackerPlayer === 1 ? 'P1' : 'P2';
+                                    lines.push(`  ${pLabel} ${src}: −${h.amount} (${dmgLabel})`);
+                                }
+                            }
+                            // Tooltip box
+                            let tipW = 260, lineH = 18;
+                            let tipH = lines.length * lineH + 14;
+                            let tipX = dx - tipW / 2;
+                            let tipY = dy - tipH - 12;
+                            // Keep on screen
+                            if (tipX < 4) tipX = 4;
+                            if (tipX + tipW > CANVAS_W - 4) tipX = CANVAS_W - tipW - 4;
+                            if (tipY < 4) tipY = dy + 20;
+                            this.ctx.save();
+                            this.ctx.fillStyle = 'rgba(20,20,28,0.92)';
+                            this.ctx.beginPath();
+                            this.ctx.roundRect(tipX, tipY, tipW, tipH, 6);
+                            this.ctx.fill();
+                            this.ctx.strokeStyle = '#706a64';
+                            this.ctx.lineWidth = 1;
+                            this.ctx.stroke();
+                            this.ctx.fillStyle = '#eee';
+                            this.ctx.font = 'bold 12px Arial';
+                            this.ctx.textAlign = 'left';
+                            this.ctx.textBaseline = 'top';
+                            for (let i = 0; i < lines.length; i++) {
+                                this.ctx.fillStyle = i === 0 ? '#ffd84a' : '#ccc';
+                                this.ctx.fillText(lines[i], tipX + 8, tipY + 6 + i * lineH);
+                            }
+                            this.ctx.restore();
+                        }
+                    } else {
+                        // ANIMATING: float numbers upward with fade
+                        const FLOAT_START = anim.duration * 0.45;
+                        const FLOAT_DUR = 2000;
+                        const FLOAT_RISE = 38;
+                        for (let d of anim.damages) {
+                            let dt = elapsed - FLOAT_START;
+                            if (dt < 0 || dt > FLOAT_DUR) continue;
+                            let p = dt / FLOAT_DUR;
+                            let eased = 1 - Math.pow(1 - p, 2);
+                            let alpha = p < 0.6 ? 1 : Math.max(0, 1 - (p - 0.6) / 0.4);
+                            let [dx, dy] = this.isoCenter(d.r, d.c);
+                            dy -= 22;
+                            dy -= FLOAT_RISE * eased;
+                            let fill = d.kind === 'cull' ? '#ff6a6a' : '#ffd84a';
+                            let txt = '-' + d.amount;
+                            this.ctx.save();
+                            this.ctx.globalAlpha = alpha;
+                            this.ctx.font = 'bold 20px Arial';
+                            this.ctx.textAlign = 'center';
+                            this.ctx.textBaseline = 'middle';
+                            this.ctx.lineWidth = 4;
+                            this.ctx.strokeStyle = '#000';
+                            this.ctx.strokeText(txt, dx, dy);
+                            this.ctx.fillStyle = fill;
+                            this.ctx.fillText(txt, dx, dy);
+                            this.ctx.restore();
+                        }
                     }
                 }
             }
@@ -7235,6 +7422,7 @@
             }
 
             render(game) {
+                this._badgeHitAreas = []; // reset each frame
                 this.drawBoard(game);
 
                 // Archmage cycle aura — pulse a colored ring under the unit
@@ -7399,6 +7587,44 @@
                     game.clickBounds = {};
                     this.drawRemoteWait(game, label);
                 }
+
+                // Amplifier badge hover tooltip — drawn last so it's on top
+                if (this._badgeHitAreas && this._badgeHitAreas.length > 0
+                    && game.phase !== 'MENU' && game.phase !== 'TUTORIAL') {
+                    let hovered = null;
+                    for (let b of this._badgeHitAreas) {
+                        let dist = Math.sqrt((mouseCanvasX - b.x) ** 2 + (mouseCanvasY - b.y) ** 2);
+                        if (dist < b.r + 6) { hovered = b; break; }
+                    }
+                    if (hovered) {
+                        let tipW = 280;
+                        let titleLine = `${hovered.glyph} ${hovered.title}`;
+                        let descLine = hovered.desc;
+                        let tipH = 42;
+                        let tipX = hovered.x - tipW / 2;
+                        let tipY = hovered.y - tipH - 10;
+                        if (tipX < 4) tipX = 4;
+                        if (tipX + tipW > CANVAS_W - 4) tipX = CANVAS_W - tipW - 4;
+                        if (tipY < 4) tipY = hovered.y + 16;
+                        this.ctx.save();
+                        this.ctx.fillStyle = 'rgba(16,16,24,0.94)';
+                        this.ctx.beginPath();
+                        this.ctx.roundRect(tipX, tipY, tipW, tipH, 6);
+                        this.ctx.fill();
+                        this.ctx.strokeStyle = hovered.color;
+                        this.ctx.lineWidth = 1.5;
+                        this.ctx.stroke();
+                        this.ctx.fillStyle = hovered.color;
+                        this.ctx.font = 'bold 13px Arial';
+                        this.ctx.textAlign = 'left';
+                        this.ctx.textBaseline = 'top';
+                        this.ctx.fillText(titleLine, tipX + 8, tipY + 5);
+                        this.ctx.fillStyle = '#ccc';
+                        this.ctx.font = '11px Arial';
+                        this.ctx.fillText(descLine, tipX + 8, tipY + 24);
+                        this.ctx.restore();
+                    }
+                }
             }
         }
 
@@ -7452,6 +7678,14 @@
             let sy = canvas.height / rect.height;
             return [(e.clientX - rect.left) * sx, (e.clientY - rect.top) * sy];
         }
+
+        // Mouse tracking for damage marker hover tooltips
+        let mouseCanvasX = -1, mouseCanvasY = -1;
+        canvas.addEventListener('mousemove', (e) => {
+            let [px, py] = canvasCoords(e);
+            mouseCanvasX = px;
+            mouseCanvasY = py;
+        });
 
         // Determine which planStep a unit starts in. Most units start in MOVE,
         // but Archmages locked into the Rain Fire / Blink phases of their
@@ -8453,6 +8687,13 @@
         canvas.addEventListener('click', (e) => {
             let [px, py] = canvasCoords(e);
 
+            // Dismiss damage pause on click
+            if (game.phase === 'ACTION_RESOLVE' && game.animation && game.animation.paused) {
+                game.animation = null;
+                game.nextPhase();
+                return;
+            }
+
             // Remote PvP: if it's not our turn, block all clicks except the
             // quit/cancel buttons on setup and waiting screens.
             let remoteBlocking = (game.gameMode === 'Remote' &&
@@ -8670,6 +8911,12 @@
         });
 
         document.addEventListener('keydown', (e) => {
+            // Dismiss damage pause on any key
+            if (game.phase === 'ACTION_RESOLVE' && game.animation && game.animation.paused) {
+                game.animation = null;
+                game.nextPhase();
+                return;
+            }
             // Remote setup: join-code typing
             if (game.phase === 'REMOTE_JOIN') {
                 if (remoteHandleKey(game, e)) { e.preventDefault(); return; }
@@ -8826,13 +9073,17 @@
                     game.resolveAction();
                 }
             }
-            // Auto-advance out of ACTION_RESOLVE when the movement + attack
-            // animation finishes so the game doesn't soft-lock on the resolve screen.
+            // After the animation finishes, pause to let the player inspect
+            // damage markers. Click or press any key to continue.
             if (game.phase === 'ACTION_RESOLVE' && game.animation) {
                 let elapsed = performance.now() - game.animation.startTime;
-                if (elapsed >= game.animation.duration) {
-                    game.animation = null;
-                    game.nextPhase();
+                if (elapsed >= game.animation.duration && !game.animation.paused) {
+                    if (game.animation.damages && game.animation.damages.length > 0) {
+                        game.animation.paused = true;
+                    } else {
+                        game.animation = null;
+                        game.nextPhase();
+                    }
                 }
             }
             requestAnimationFrame(gameLoop);
