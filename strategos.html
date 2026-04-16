@@ -801,6 +801,33 @@
                         }
                     }
                 }
+
+                // PHALANX: 3+ friendly Squires in a contiguous orthogonal line
+                for (let team of [this.p1Units, this.p2Units]) {
+                    let squires = team.filter(u => u.type === 'Squire');
+                    let posMap = {};
+                    for (let s of squires) {
+                        let r = pr(s), c = pc(s);
+                        if (r != null) posMap[`${r},${c}`] = s;
+                    }
+                    for (let s of squires) {
+                        let r = pr(s), c = pc(s);
+                        if (r == null) continue;
+                        let hL = 0, hR = 0;
+                        while (posMap[`${r},${c - hL - 1}`]) hL++;
+                        while (posMap[`${r},${c + hR + 1}`]) hR++;
+                        if (hL + hR + 1 >= 3) {
+                            if (!s._activeSynergies.includes('Phalanx')) s._activeSynergies.push('Phalanx');
+                            continue;
+                        }
+                        let vU = 0, vD = 0;
+                        while (posMap[`${r - vU - 1},${c}`]) vU++;
+                        while (posMap[`${r + vD + 1},${c}`]) vD++;
+                        if (vU + vD + 1 >= 3) {
+                            if (!s._activeSynergies.includes('Phalanx')) s._activeSynergies.push('Phalanx');
+                        }
+                    }
+                }
             }
 
             // Log a damage event so drawActionAnim can float a number above
@@ -1184,11 +1211,21 @@
                                     claimed.add(`${bump[0]},${bump[1]}`);
                                     bounced.add(u);
                                 } else {
-                                    u.hp = 0; // squeezed
+                                    // No room to push — defender holds the edge.
+                                    // The attacker bounces back instead. Defender
+                                    // takes trample-equivalent damage for the impact
+                                    // but keeps their tile.
+                                    let winOrig = origPos.get(winner);
+                                    winner.plannedR = winOrig.r;
+                                    winner.plannedC = winOrig.c;
+                                    bounced.add(winner);
+                                    this.hit(winner, u, true, 'Me', 1, 0, 'Edge impact');
                                     if (this.combatLog) {
                                         let tName = u.player === 1 ? 'P1' : 'P2';
-                                        this.combatLog.push(`${tName} ${u.type} [Squeeze]: crushed (no escape tile after collision)`);
+                                        let wName = winner.player === 1 ? 'P1' : 'P2';
+                                        this.combatLog.push(`${tName} ${u.type} holds edge — ${wName} ${winner.type} bounces back`);
                                     }
+                                    break; // contest resolved — winner bounced
                                 }
                             } else {
                                 let orig = origPos.get(u);
@@ -1415,6 +1452,7 @@
                         if (e === trap.ownerId) continue; // Rogue immune to own trap
                         let dmg = Math.max(1, baseDmg - STATS[e.type].dfn.Ex);
                         e.hp -= dmg;
+                        this.recordDamage(e, dmg, 'dmg', trap.ownerId, 'Ex');
                         if (this.combatLog) {
                             let trapOwnerType = trap.ownerId ? trap.ownerId.type : 'Rogue';
                             let pName = trap.player === 1 ? 'P1' : 'P2';
@@ -1433,6 +1471,7 @@
                         if (dr > splashRadius || dc > splashRadius) continue;
                         let dmg = Math.max(1, Math.floor((baseDmg - STATS[e.type].dfn.Ex) / 2));
                         e.hp -= dmg;
+                        this.recordDamage(e, dmg, 'dmg', trap.ownerId, 'Ex');
                         if (this.combatLog) {
                             let trapOwnerType = trap.ownerId ? trap.ownerId.type : 'Rogue';
                             let pName = trap.player === 1 ? 'P1' : 'P2';
@@ -1543,6 +1582,7 @@
                         if (centerVictim) {
                             let dmg = Math.max(1, 14 - STATS[centerVictim.type].dfn.Ma);
                             centerVictim.hp -= dmg;
+                            this.recordDamage(centerVictim, dmg, 'dmg', u, 'Ma');
                             if (this.combatLog) {
                                 let pName = u.player === 1 ? 'P1' : 'P2';
                                 let tName = centerVictim.player === 1 ? 'P1' : 'P2';
@@ -1566,6 +1606,7 @@
                             if (!v) continue;
                             let dmg = Math.max(1, 7 - STATS[v.type].dfn.Ma);
                             v.hp -= dmg;
+                            this.recordDamage(v, dmg, 'dmg', u, 'Ma');
                             if (this.combatLog) {
                                 let pName = u.player === 1 ? 'P1' : 'P2';
                                 let tName = v.player === 1 ? 'P1' : 'P2';
@@ -1876,7 +1917,7 @@
                                 if (adFocus && adFocus.r === targetR && adFocus.c === targetC) {
                                     let adMag = Math.max(1, STATS['Adept'].atk.Ma - STATS[tgt.type].dfn.Ma);
                                     tgt.hp -= Math.floor(adMag / 2);
-                                    this.recordDamage(tgt, Math.floor(adMag / 2), 'dmg');
+                                    this.recordDamage(tgt, Math.floor(adMag / 2), 'dmg', ad, 'Ma');
                                     if (this.combatLog) {
                                         let pName = u.player === 1 ? 'P1' : 'P2';
                                         let tName = tgt.player === 1 ? 'P1' : 'P2';
@@ -1975,12 +2016,12 @@
                 // reports a draw.
                 if (this.turn >= this.cullingTurn) {
                     for (let u of [...this.p1Units, ...this.p2Units]) {
-                        let attrition = Math.ceil(u.maxHp * 0.25);
+                        let attrition = Math.max(1, Math.ceil(u.hp * 0.25));
                         u.hp -= attrition;
                         this.recordDamage(u, attrition, 'cull');
                         if (this.combatLog) {
                             let tName = u.player === 1 ? 'P1' : 'P2';
-                            this.combatLog.push(`${tName} ${u.type} [Attrition]: ${attrition} dmg (25% of ${u.maxHp} max HP)`);
+                            this.combatLog.push(`${tName} ${u.type} [Attrition]: ${attrition} dmg (25% of ${u.hp + attrition} remaining HP)`);
                         }
                     }
                     this.p1Units = this.p1Units.filter(u => u.hp > 0);
@@ -3025,6 +3066,7 @@
                         Vanguard:       {glyph: '➤',  color: '#80ff80', title: 'Vanguard', desc: 'Squire scored a kill last turn — +1 movement this turn'},
                         ArcingFirebolt: {glyph: '✺',  color: '#ff60a0', title: 'Arcing Firebolt', desc: '2+ magic users targeting the same tile — bolts arc to adjacent enemies'},
                         FocusedChan:    {glyph: '◈',  color: '#a080ff', title: 'Focused Channeling', desc: 'Stationary Adept — +1 Magic dmg per turn held still'},
+                        Phalanx:        {glyph: '▥',  color: '#cfd8ff', title: 'Phalanx', desc: '3+ Squires in a line — +2 Melee defense, halts enemy charges'},
                     };
                     let shown = [];
                     for (let s of u._activeSynergies) {
@@ -3076,9 +3118,11 @@
                 this.ctx.fillStyle = '#1c1a18';
                 this.ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
 
-                // Refresh synergy flags during planning so indicator badges
-                // light up in real time as the player moves units around.
-                if (game.phase === 'PLAN_P1' || game.phase === 'PLAN_P2') {
+                // Refresh synergy flags during gameplay so indicator badges
+                // and phalanx aura light up in real time.
+                if (game.phase !== 'MENU' && game.phase !== 'TUTORIAL'
+                    && game.phase !== 'BUDGET' && !game.phase.startsWith('SHOP')
+                    && !game.phase.startsWith('HANDOFF') && !game.phase.startsWith('REMOTE_')) {
                     game.computeSynergies();
                 }
 
@@ -3136,6 +3180,63 @@
                 // the device is handed over; in Remote PvP the opponent's
                 // roster isn't even synced yet, so this is a no-op there.
                 let hideOpponentForPlacement = (game.phase === 'PLACE_P1' || game.phase === 'PLACE_P2');
+
+                // Phalanx aura: glowing connection between 3+ Squires in a line.
+                // Drawn under units so the glow sits on the tiles.
+                // Respects placement visibility — don't reveal opponent positions.
+                if (game.phase !== 'ACTION_RESOLVE' && !game.phase.startsWith('HANDOFF')) {
+                    for (let team of [game.p1Units, game.p2Units]) {
+                        let teamPlayer = team.length > 0 ? team[0].player : 0;
+                        // During placement, only show aura for the active player
+                        if (hideOpponentForPlacement && viewPlayer && teamPlayer !== viewPlayer) continue;
+                        let squires = team.filter(u => u.type === 'Squire' && u._activeSynergies && u._activeSynergies.includes('Phalanx'));
+                        if (squires.length < 3) continue;
+                        let teamColor = squires[0].player === 1 ? 'rgba(100,140,255,' : 'rgba(255,100,100,';
+                        let pulse = 0.4 + 0.2 * Math.sin(performance.now() / 500);
+                        // Draw glow on each phalanx Squire's tile
+                        for (let s of squires) {
+                            let sr = s.plannedR != null ? s.plannedR : s.r;
+                            let sc = s.plannedC != null ? s.plannedC : s.c;
+                            if (sr == null) continue;
+                            let [hx, hy] = this.isoCenter(sr, sc);
+                            // Tile glow
+                            this.ctx.save();
+                            this.ctx.fillStyle = teamColor + (pulse * 0.3) + ')';
+                            this.ctx.beginPath();
+                            this.ctx.moveTo(hx, hy - ISO_TH);
+                            this.ctx.lineTo(hx + ISO_TW, hy);
+                            this.ctx.lineTo(hx, hy + ISO_TH);
+                            this.ctx.lineTo(hx - ISO_TW, hy);
+                            this.ctx.closePath();
+                            this.ctx.fill();
+                            this.ctx.restore();
+                        }
+                        // Draw connecting lines between adjacent phalanx Squires
+                        for (let i = 0; i < squires.length; i++) {
+                            for (let j = i + 1; j < squires.length; j++) {
+                                let a = squires[i], b = squires[j];
+                                let ar = a.plannedR != null ? a.plannedR : a.r;
+                                let ac = a.plannedC != null ? a.plannedC : a.c;
+                                let br = b.plannedR != null ? b.plannedR : b.r;
+                                let bc = b.plannedC != null ? b.plannedC : b.c;
+                                if (ar == null || br == null) continue;
+                                let dr = Math.abs(ar - br), dc = Math.abs(ac - bc);
+                                if ((dr === 1 && dc === 0) || (dr === 0 && dc === 1)) {
+                                    let [ax, ay] = this.isoCenter(ar, ac);
+                                    let [bx, by] = this.isoCenter(br, bc);
+                                    this.ctx.save();
+                                    this.ctx.strokeStyle = teamColor + pulse + ')';
+                                    this.ctx.lineWidth = 3;
+                                    this.ctx.beginPath();
+                                    this.ctx.moveTo(ax, ay);
+                                    this.ctx.lineTo(bx, by);
+                                    this.ctx.stroke();
+                                    this.ctx.restore();
+                                }
+                            }
+                        }
+                    }
+                }
 
                 // Draw units in painter's order
                 for (let s = 0; s <= ROWS + COLS - 2; s++) {
@@ -6812,8 +6913,8 @@
                 this.ctx.fillText(`Tokens: ${left} / ${game.budget}`, CANVAS_W - 14, UI_TOP + 48);
 
                 // L1 unit buy cards (3 across)
-                let cardY = UI_TOP + 72;
-                let cardH = 90;
+                let cardY = UI_TOP + 68;
+                let cardH = 70;
                 let cardW = 225;
                 let margin = 12;
                 let startX = (CANVAS_W - (cardW * 3 + margin * 2)) / 2;
@@ -6826,27 +6927,23 @@
 
                 // Roster header
                 this.ctx.fillStyle = '#eeeeee';
-                this.ctx.font = 'bold 14px Arial';
+                this.ctx.font = 'bold 13px Arial';
                 this.ctx.textAlign = 'left';
-                this.ctx.fillText(`Your Roster (${units.length})`, 14, UI_TOP + 180);
+                this.ctx.fillText(`Your Roster (${units.length})`, 14, UI_TOP + 150);
 
-                // Roster unit rows with upgrade buttons
-                let rosterY = UI_TOP + 192;
-                let rowH = 48;
-                let maxRows = 6;
-                for (let i = 0; i < Math.min(units.length, maxRows); i++) {
+                // Roster unit rows with upgrade buttons — fit all 10
+                let rosterY = UI_TOP + 160;
+                let btnY = CANVAS_H - 50;
+                let availH = btnY - rosterY - 8;
+                let rowH = Math.min(40, Math.floor(availH / Math.max(units.length, 1)));
+                for (let i = 0; i < units.length; i++) {
                     let u = units[i];
                     let y = rosterY + i * rowH;
-                    this.drawRosterRow(game, i, u, y, rowH - 4, left);
-                }
-                if (units.length > maxRows) {
-                    this.ctx.fillStyle = '#b2aca4';
-                    this.ctx.font = '11px Arial';
-                    this.ctx.fillText(`...and ${units.length - maxRows} more`, 14, rosterY + maxRows * rowH + 14);
+                    this.drawRosterRow(game, i, u, y, rowH - 3, left);
                 }
 
                 // Bottom: clear and confirm buttons
-                let btnY = CANVAS_H - 50;
+                btnY = CANVAS_H - 50;
                 this.drawButton(game, 'shop_clear', 14, btnY, 140, 36, 'Clear Roster', {color: '#7a3a3a'});
                 let canConfirm = units.length > 0;
                 this.drawButton(game, 'shop_confirm', CANVAS_W - 240, btnY, 226, 36,
@@ -6920,27 +7017,34 @@
                 this.ctx.fillStyle = unit.player === 1 ? P1_COLOR : P2_COLOR;
                 this.ctx.fillRect(x, y, 4, h);
 
-                // Name + invested
+                // Name + invested (vertically centered)
+                let compact = h < 36;
                 this.ctx.fillStyle = '#ffffff';
-                this.ctx.font = 'bold 14px Arial';
+                this.ctx.font = compact ? 'bold 12px Arial' : 'bold 14px Arial';
                 this.ctx.textAlign = 'left';
-                this.ctx.fillText(`${unit.type}`, x + 14, y + 18);
-                this.ctx.fillStyle = '#b2aca4';
-                this.ctx.font = '11px Arial';
-                this.ctx.fillText(`${INVESTED[unit.type]}t invested · HP ${s.hp}`, x + 14, y + 34);
+                if (compact) {
+                    this.ctx.fillText(`${unit.type}  (${INVESTED[unit.type]}t · HP ${s.hp})`, x + 14, y + h / 2 + 4);
+                } else {
+                    this.ctx.fillText(`${unit.type}`, x + 14, y + h * 0.38);
+                    this.ctx.fillStyle = '#b2aca4';
+                    this.ctx.font = '11px Arial';
+                    this.ctx.fillText(`${INVESTED[unit.type]}t invested · HP ${s.hp}`, x + 14, y + h * 0.72);
+                }
 
                 // Remove button
-                this.drawButton(game, `remove_${idx}`, x + 220, y + 6, 80, h - 12, '✕ Remove', {color: '#6a2a2a', font: 'bold 11px Arial'});
+                let btnH = Math.min(h - 6, 30);
+                let btnPad = (h - btnH) / 2;
+                this.drawButton(game, `remove_${idx}`, x + 220, y + btnPad, 80, btnH, '✕ Remove', {color: '#6a2a2a', font: 'bold 11px Arial'});
 
                 // Upgrade button (or tier max)
                 if (nextTier) {
-                    this.drawButton(game, `upgrade_${idx}`, x + w - 210, y + 6, 200, h - 12,
+                    this.drawButton(game, `upgrade_${idx}`, x + w - 210, y + btnPad, 200, btnH,
                         `▲ ${nextTier} (+${upgCost}t)`, {color: canUp ? '#46a046' : '#3a3a3a', enabled: canUp, font: 'bold 12px Arial'});
                 } else {
                     this.ctx.fillStyle = '#ffcc44';
                     this.ctx.font = 'bold 12px Arial';
                     this.ctx.textAlign = 'right';
-                    this.ctx.fillText('MAX TIER', x + w - 14, y + 28);
+                    this.ctx.fillText('MAX TIER', x + w - 14, y + h / 2 + 4);
                 }
             }
 
@@ -7700,6 +7804,178 @@
                     // local player can't click through the overlay.
                     game.clickBounds = {};
                     this.drawRemoteWait(game, label);
+                }
+
+                // ===== REFERENCE ICONS =====
+                // Two small icons above the board corners for quick stat/amplifier lookup.
+                // Visible during gameplay phases (not menu/tutorial/shop).
+                if (!['MENU','TUTORIAL','BUDGET'].includes(game.phase)
+                    && !game.phase.startsWith('SHOP') && !game.phase.startsWith('HANDOFF')
+                    && !game.phase.startsWith('REMOTE_')) {
+                    let statsIconX = 30, statsIconY = 20, iconR = 15;
+                    let ampsIconX = CANVAS_W - 30, ampsIconY = 20;
+
+                    // Detect hover or tap-toggle
+                    let statsDist = Math.sqrt((mouseCanvasX - statsIconX) ** 2 + (mouseCanvasY - statsIconY) ** 2);
+                    let ampsDist = Math.sqrt((mouseCanvasX - ampsIconX) ** 2 + (mouseCanvasY - ampsIconY) ** 2);
+                    let statsHover = statsDist < iconR + 6 || game._refPanelOpen === 'stats';
+                    let ampsHover = ampsDist < iconR + 6 || game._refPanelOpen === 'amps';
+
+                    // Draw stats icon (⚔)
+                    this.ctx.save();
+                    this.ctx.fillStyle = statsHover ? 'rgba(60,80,120,0.95)' : 'rgba(30,30,40,0.75)';
+                    this.ctx.beginPath();
+                    this.ctx.arc(statsIconX, statsIconY, iconR, 0, Math.PI * 2);
+                    this.ctx.fill();
+                    this.ctx.strokeStyle = statsHover ? '#ffd84a' : '#706a64';
+                    this.ctx.lineWidth = 1.5;
+                    this.ctx.stroke();
+                    this.ctx.fillStyle = statsHover ? '#fff' : '#b2aca4';
+                    this.ctx.font = 'bold 14px Arial';
+                    this.ctx.textAlign = 'center';
+                    this.ctx.textBaseline = 'middle';
+                    this.ctx.fillText('⚔', statsIconX, statsIconY);
+                    this.ctx.restore();
+
+                    // Draw amps icon (✦)
+                    this.ctx.save();
+                    this.ctx.fillStyle = ampsHover ? 'rgba(60,80,120,0.95)' : 'rgba(30,30,40,0.75)';
+                    this.ctx.beginPath();
+                    this.ctx.arc(ampsIconX, ampsIconY, iconR, 0, Math.PI * 2);
+                    this.ctx.fill();
+                    this.ctx.strokeStyle = ampsHover ? '#9af0ff' : '#706a64';
+                    this.ctx.lineWidth = 1.5;
+                    this.ctx.stroke();
+                    this.ctx.fillStyle = ampsHover ? '#fff' : '#b2aca4';
+                    this.ctx.font = 'bold 14px Arial';
+                    this.ctx.textAlign = 'center';
+                    this.ctx.textBaseline = 'middle';
+                    this.ctx.fillText('✦', ampsIconX, ampsIconY);
+                    this.ctx.restore();
+
+                    // Register click areas for tap-toggle (mobile)
+                    this._refIconAreas = [
+                        { x: statsIconX, y: statsIconY, r: iconR, panel: 'stats' },
+                        { x: ampsIconX, y: ampsIconY, r: iconR, panel: 'amps' },
+                    ];
+
+                    // Stats panel
+                    if (statsHover) {
+                        let types = ['Squire','Knight','Paladin','Archer','Rogue','Assassin','Adept','Mage','Archmage'];
+                        let rowH = 15, headerH = 20, sectionGap = 22;
+                        let atkRows = types.length;
+                        let panW = 480;
+                        let panH = headerH + atkRows * rowH + sectionGap + headerH + atkRows * rowH + 12;
+                        let panX = 8, panY = statsIconY + iconR + 8;
+                        // Clamp panel to screen
+                        if (panY + panH > UI_TOP - 4) panY = UI_TOP - panH - 4;
+                        if (panY < 4) panY = 4;
+                        this.ctx.save();
+                        this.ctx.fillStyle = 'rgba(14,14,22,0.96)';
+                        this.ctx.beginPath();
+                        this.ctx.roundRect(panX, panY, panW, panH, 6);
+                        this.ctx.fill();
+                        this.ctx.strokeStyle = '#ffd84a';
+                        this.ctx.lineWidth = 1;
+                        this.ctx.stroke();
+                        this.ctx.textAlign = 'left';
+                        this.ctx.textBaseline = 'top';
+
+                        // --- ATTACK TABLE ---
+                        this.ctx.fillStyle = '#ffd84a';
+                        this.ctx.font = 'bold 10px Arial';
+                        let aCols = ['Unit','Cost','HP','Mv','Rng','Wt','Atk','Type','Special'];
+                        let aX = [panX+8, panX+65, panX+95, panX+125, panX+150, panX+177, panX+202, panX+230, panX+290];
+                        for (let i = 0; i < aCols.length; i++) this.ctx.fillText(aCols[i], aX[i], panY + 4);
+                        this.ctx.font = '9px Arial';
+                        for (let j = 0; j < types.length; j++) {
+                            let t = types[j], s = STATS[t];
+                            let y = panY + headerH + j * rowH;
+                            let tier = INVESTED[t];
+                            let tierColor = tier >= 6 ? '#f6d87a' : tier >= 3 ? '#b0c4ff' : '#ccc';
+                            this.ctx.fillStyle = tierColor;
+                            let atkType = s.atk_type;
+                            let atkKey = atkType === 'Piercing' ? 'P' : atkType === 'Melee' ? 'Me' : 'Ma';
+                            let atkVal = s.atk[atkKey];
+                            let special = '';
+                            if (s.cleave > 0) special = `Cleave ${s.cleave}`;
+                            if (s.firebolt) special = 'Firebolt';
+                            if (s.blocks) special += (special ? ', ' : '') + 'Block';
+                            if (t === 'Archer') special = 'Readied Shot';
+                            if (t === 'Rogue' || t === 'Assassin') special = 'Trap';
+                            if (t === 'Assassin') special += ', Stealth';
+                            if (t === 'Archmage') special = 'Rain Fire, Blink';
+                            let vals = [t, tier+'t', s.hp, s.mov, s.rng, s.weight, atkVal, atkType, special];
+                            for (let i = 0; i < vals.length; i++) this.ctx.fillText(''+vals[i], aX[i], y);
+                        }
+
+                        // --- DEFENSE TABLE ---
+                        let defStartY = panY + headerH + atkRows * rowH + sectionGap;
+                        this.ctx.fillStyle = '#9af0ff';
+                        this.ctx.font = 'bold 10px Arial';
+                        let dCols = ['Unit','vs Pierce','vs Melee','vs Explo','vs Magic'];
+                        let dX = [panX+8, panX+75, panX+155, panX+235, panX+315];
+                        for (let i = 0; i < dCols.length; i++) this.ctx.fillText(dCols[i], dX[i], defStartY);
+                        this.ctx.font = '9px Arial';
+                        for (let j = 0; j < types.length; j++) {
+                            let t = types[j], s = STATS[t];
+                            let y = defStartY + headerH + j * rowH;
+                            let tier = INVESTED[t];
+                            let tierColor = tier >= 6 ? '#f6d87a' : tier >= 3 ? '#b0c4ff' : '#ccc';
+                            this.ctx.fillStyle = tierColor;
+                            let vals = [t, s.dfn.P, s.dfn.Me, s.dfn.Ex, s.dfn.Ma];
+                            for (let i = 0; i < vals.length; i++) this.ctx.fillText(''+vals[i], dX[i], y);
+                        }
+                        this.ctx.restore();
+                    }
+
+                    // Amplifiers panel
+                    if (ampsHover) {
+                        let amps = [
+                            {glyph:'⇑', name:'High Ground', unit:'Archer', desc:'+1 range from back row'},
+                            {glyph:'⇶', name:'Volley', unit:'2 Archers', desc:'Adjacent pair sweeps shared line'},
+                            {glyph:'◎', name:'Accuracy', unit:'Archer', desc:'+50%/stack (max 3) if stationary + same target'},
+                            {glyph:'✦', name:'Steady Aim', unit:'Archer', desc:'+2 Pierce with Squire directly in front'},
+                            {glyph:'⚒', name:'Anvil & Hammer', unit:'Archer', desc:'+2 dmg targeting near a Squire'},
+                            {glyph:'🔥', name:'Flame Arrow', unit:'Archer+Adept', desc:'Same target → arrow gains half Magic dmg'},
+                            {glyph:'✚', name:'Last Stand', unit:'Squire', desc:'+3 Me def when isolated (no adjacent allies)'},
+                            {glyph:'➤', name:'Vanguard', unit:'Squire', desc:'+1 move next turn after a kill'},
+                            {glyph:'✺', name:'Arcing Firebolt', unit:'2+ Magic', desc:'Same target → 2.5× center + 3 splash'},
+                            {glyph:'◈', name:'Focused Chan.', unit:'Adept', desc:'+1 Magic/turn while stationary'},
+                            {glyph:'▥', name:'Phalanx', unit:'3+ Squires', desc:'+2 Melee def in a row/column, halts charges'},
+                        ];
+                        let panW = 380, rowH = 17;
+                        let panH = 24 + amps.length * rowH + 8;
+                        let panX = CANVAS_W - panW - 8, panY = ampsIconY + iconR + 8;
+                        this.ctx.save();
+                        this.ctx.fillStyle = 'rgba(14,14,22,0.96)';
+                        this.ctx.beginPath();
+                        this.ctx.roundRect(panX, panY, panW, panH, 6);
+                        this.ctx.fill();
+                        this.ctx.strokeStyle = '#9af0ff';
+                        this.ctx.lineWidth = 1;
+                        this.ctx.stroke();
+                        // Header
+                        this.ctx.fillStyle = '#9af0ff';
+                        this.ctx.font = 'bold 11px Arial';
+                        this.ctx.textAlign = 'left';
+                        this.ctx.textBaseline = 'top';
+                        this.ctx.fillText('Amplifiers — position bonuses that trigger automatically', panX + 8, panY + 5);
+                        // Rows
+                        for (let i = 0; i < amps.length; i++) {
+                            let a = amps[i];
+                            let y = panY + 24 + i * rowH;
+                            this.ctx.fillStyle = '#f6d87a';
+                            this.ctx.font = 'bold 10px Arial';
+                            this.ctx.fillText(`${a.glyph} ${a.name}`, panX + 8, y);
+                            this.ctx.fillStyle = '#999';
+                            this.ctx.font = '10px Arial';
+                            this.ctx.fillText(a.unit, panX + 130, y);
+                            this.ctx.fillStyle = '#ccc';
+                            this.ctx.fillText(a.desc, panX + 195, y);
+                        }
+                        this.ctx.restore();
+                    }
                 }
 
                 // Amplifier badge hover tooltip — drawn last so it's on top
@@ -8806,6 +9082,19 @@
                 game.animation = null;
                 game.nextPhase();
                 return;
+            }
+
+            // Reference icon tap-toggle (for mobile)
+            if (renderer._refIconAreas) {
+                for (let icon of renderer._refIconAreas) {
+                    let dist = Math.sqrt((px - icon.x) ** 2 + (py - icon.y) ** 2);
+                    if (dist < icon.r + 8) {
+                        game._refPanelOpen = game._refPanelOpen === icon.panel ? null : icon.panel;
+                        return;
+                    }
+                }
+                // Tap elsewhere closes the panel (but don't block the click)
+                if (game._refPanelOpen) { game._refPanelOpen = null; }
             }
 
             // Remote PvP: if it's not our turn, block all clicks except the
