@@ -1527,17 +1527,27 @@
                     let baseDmg = 8; // Explosive base damage from a Rogue trap
                     let splashRadius = trap.twinTrap ? 2 : 1; // Twin = 5×5, normal = 3×3
                     let triggers = triggersByTile[`${trap.r},${trap.c}`] || new Set();
-                    // Triggers (whoever stepped on / charged through) take full damage
+                    // Triggers (whoever stepped on / charged through) take full damage.
+                    // Chargers who passed through the trap mid-charge take unmitigated
+                    // damage — momentum carries them straight into the blast.
                     for (let e of triggers) {
                         if (e === trap.ownerId) continue; // Rogue immune to own trap
-                        let dmg = Math.max(1, baseDmg - STATS[e.type].dfn.Ex);
+                        let orig = origPos.get(e);
+                        let wasCharging = orig && ((Math.abs(e.r - orig.r) === 2 && e.c === orig.c) || (e.r === orig.r && Math.abs(e.c - orig.c) === 2));
+                        let dmg;
+                        if (wasCharging) {
+                            dmg = baseDmg; // full unmitigated damage — no defense
+                        } else {
+                            dmg = Math.max(1, baseDmg - STATS[e.type].dfn.Ex);
+                        }
                         e.hp -= dmg;
                         this.recordDamage(e, dmg, 'dmg', trap.ownerId, 'Ex');
                         if (this.combatLog) {
                             let trapOwnerType = trap.ownerId ? trap.ownerId.type : 'Rogue';
                             let pName = trap.player === 1 ? 'P1' : 'P2';
                             let tName = e.player === 1 ? 'P1' : 'P2';
-                            this.combatLog.push(`${pName} ${trapOwnerType} Trap → ${tName} ${e.type} [Trap]: ${dmg} dmg (${baseDmg} explosive - ${STATS[e.type].dfn.Ex} dfn(Ex))`);
+                            let chargeNote = wasCharging ? ', charge — no defense' : '';
+                            this.combatLog.push(`${pName} ${trapOwnerType} Trap → ${tName} ${e.type} [Trap]: ${dmg} dmg (${baseDmg} explosive${wasCharging ? '' : ' - ' + STATS[e.type].dfn.Ex + ' dfn(Ex)'}${chargeNote})`);
                         }
                         // Twin Trap reveals stealthed victims.
                         if (trap.twinTrap && e.stealthed) e.stealthed = false;
@@ -3105,35 +3115,33 @@
                 return `rgb(${Math.floor(r*factor)},${Math.floor(g*factor)},${Math.floor(b*factor)})`;
             }
 
-            drawUnit(u, highlight, overrideRC) {
+            // animOpts: { rotate, scaleX, scaleY, offsetX, offsetY }
+            // All optional — used by drawActionAnim for movement lean,
+            // hit recoil, charge bounce, and death topple.
+            drawUnit(u, highlight, overrideRC, animOpts) {
                 let rr = u.r, cc = u.c;
                 if (overrideRC) { rr = overrideRC[0]; cc = overrideRC[1]; }
                 let [cx, cy] = this.isoCenter(rr, cc);
                 let color = u.player === 1 ? P1_COLOR : P2_COLOR;
-                // Bright, high-contrast team-color accent used for rings/tints so
-                // players can tell at a glance which units are theirs. These are
-                // purposefully saturated versions of the base team colors.
                 let teamAccent = u.player === 1 ? '#5aa6ff' : '#ff6a6a';
                 let teamAccentDeep = u.player === 1 ? '#1e66ff' : '#ff2f2f';
 
-                // Tier-based sizing: L1 compact, L2 medium, L3 impressive
                 let [sw, sh] = spriteSize(u.type);
-
-                // Anchor sprite so its plinth BASE (bottom of SVG viewBox) sits just
-                // below the tile's isometric center, making pieces look planted on
-                // the tile's top face. All 9 SVGs place their plinth at viewBox-bottom.
                 const PLINTH_OFFSET = 6;
                 let sx = cx - sw / 2;
                 let sy = cy - sh + PLINTH_OFFSET;
 
-                // Team-colored plinth ring under the unit — a filled ellipse
-                // that reads as a team banner underfoot. Drawn BEFORE the
-                // sprite so the sprite sits on top of it.
+                // Apply animation offsets
+                let ao = animOpts || {};
+                let offX = ao.offsetX || 0;
+                let offY = ao.offsetY || 0;
+
+                // Plinth ring (not affected by rotation/scale — stays grounded)
                 this.ctx.save();
                 this.ctx.fillStyle = teamAccentDeep;
                 this.ctx.globalAlpha = 0.85;
                 this.ctx.beginPath();
-                this.ctx.ellipse(cx, cy + PLINTH_OFFSET, 18, 7, 0, 0, Math.PI * 2);
+                this.ctx.ellipse(cx + offX, cy + PLINTH_OFFSET + offY, 18, 7, 0, 0, Math.PI * 2);
                 this.ctx.fill();
                 this.ctx.globalAlpha = 1;
                 this.ctx.strokeStyle = teamAccent;
@@ -3141,16 +3149,26 @@
                 this.ctx.stroke();
                 this.ctx.restore();
 
+                // Sprite with transforms (rotate around the base of the unit)
                 let sprite = UNIT_SPRITES[u.type + '_' + u.player];
                 let drew = false;
                 if (sprite && sprite.complete && sprite.naturalWidth > 0) {
-                    this.ctx.drawImage(sprite, sx, sy, sw, sh);
+                    this.ctx.save();
+                    // Transform origin = base center of sprite (where it meets the ground)
+                    let pivotX = cx + offX;
+                    let pivotY = cy + PLINTH_OFFSET + offY;
+                    this.ctx.translate(pivotX, pivotY);
+                    if (ao.rotate) this.ctx.rotate(ao.rotate);
+                    if (ao.scaleX != null || ao.scaleY != null) {
+                        this.ctx.scale(ao.scaleX || 1, ao.scaleY || 1);
+                    }
+                    this.ctx.drawImage(sprite, -sw / 2, -sh, sw, sh);
+                    this.ctx.restore();
                     drew = true;
                 }
                 if (!drew) {
-                    // Fallback silhouette (only during initial async image decode)
                     this.ctx.fillStyle = color;
-                    this.ctx.fillRect(cx - sw / 3, sy + 10, (sw * 2) / 3, sh - 16);
+                    this.ctx.fillRect(cx - sw / 3 + offX, sy + 10 + offY, (sw * 2) / 3, sh - 16);
                 }
 
                 // Upper team-color chevron — a tiny colored pennant above the
@@ -3852,12 +3870,63 @@
                 // Fade window for dead units: start fading after moves finish
                 let fadeT = Math.max(0, Math.min(1, (t - 0.50) / 0.35));
 
+                // Compute whether we're in the attack window (for hit recoil)
+                let inAttackWindow = t >= 0.45 && t < 0.85;
+                let attackLocalT = inAttackWindow ? (t - 0.45) / 0.40 : 0;
+
                 for (let d of drawList) {
                     let alpha = d.blinkAlpha != null ? d.blinkAlpha : 1;
                     if (!d.alive) alpha *= (1 - fadeT);
                     if (alpha <= 0.01) continue;
+
+                    let ao = {}; // animation options
+
+                    // --- MOVEMENT LEAN ---
+                    // Tilt sprite in the direction of travel during movement phase
+                    if (d.startR !== d.endR || d.startC !== d.endC) {
+                        let moveDR = d.endR - d.startR, moveDC = d.endC - d.startC;
+                        // Lean angle based on horizontal component of iso movement
+                        let leanDir = moveDC - moveDR; // positive = leaning right in iso
+                        let leanAmount = leanDir > 0 ? 0.12 : leanDir < 0 ? -0.12 : 0;
+                        // Lean fades in during movement, snaps back when done
+                        let leanT = moveT < 1 ? Math.sin(moveT * Math.PI) : 0;
+                        ao.rotate = leanAmount * leanT;
+                    }
+
+                    // --- CHARGE BOUNCE ---
+                    // Knights/Paladins doing a 2-tile charge get a rhythmic gallop
+                    if (d.unit.type === 'Knight' || d.unit.type === 'Paladin') {
+                        let dist = Math.abs(d.endR - d.startR) + Math.abs(d.endC - d.startC);
+                        if (dist === 2 && moveT < 1) {
+                            // Two bounces during the charge
+                            let bounceT = moveT * 2 * Math.PI * 2; // 2 full cycles
+                            ao.offsetY = -Math.abs(Math.sin(bounceT)) * 6;
+                        }
+                    }
+
+                    // --- HIT RECOIL ---
+                    // Units that took damage shake during the attack window
+                    if (inAttackWindow && anim.damages) {
+                        let wasDamaged = anim.damages.some(dm =>
+                            dm.r === d.endR && dm.c === d.endC);
+                        if (wasDamaged) {
+                            let shakePhase = attackLocalT * Math.PI * 6; // 3 shakes
+                            let shakeDecay = 1 - attackLocalT; // fade out
+                            ao.offsetX = Math.sin(shakePhase) * 4 * shakeDecay;
+                        }
+                    }
+
+                    // --- DEATH TOPPLE ---
+                    // Dead units rotate and shrink as they fade out
+                    if (!d.alive && fadeT > 0) {
+                        let toppleDir = d.unit.player === 1 ? 1 : -1;
+                        ao.rotate = (ao.rotate || 0) + toppleDir * fadeT * 0.8;
+                        ao.scaleX = 1 - fadeT * 0.3;
+                        ao.scaleY = 1 - fadeT * 0.3;
+                    }
+
                     this.ctx.globalAlpha = alpha;
-                    this.drawUnit(d.unit, false, [d.ar, d.ac]);
+                    this.drawUnit(d.unit, false, [d.ar, d.ac], ao);
                     this.ctx.globalAlpha = 1;
                 }
 
