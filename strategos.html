@@ -105,6 +105,31 @@
             Adept: 1, Mage: 3, Archmage: 6
         };
 
+        // ===== LEADERBOARD (localStorage) =====
+        function getLeaderboard(difficulty) {
+            try {
+                let key = 'strategos_lb_' + difficulty;
+                return JSON.parse(localStorage.getItem(key)) || [];
+            } catch(e) { return []; }
+        }
+        function saveToLeaderboard(scoreObj) {
+            if (!scoreObj || !scoreObj.difficulty) return;
+            let key = 'strategos_lb_' + scoreObj.difficulty;
+            let board = getLeaderboard(scoreObj.difficulty);
+            board.push({
+                name: scoreObj.playerName || 'Player',
+                score: scoreObj.total,
+                survivors: scoreObj.survivors,
+                turns: scoreObj.turnsUsed,
+                unspent: scoreObj.unspentTokens,
+                date: new Date().toISOString().slice(0, 10)
+            });
+            board.sort((a, b) => b.score - a.score);
+            board = board.slice(0, 10); // keep top 10
+            try { localStorage.setItem(key, JSON.stringify(board)); } catch(e) {}
+            return board;
+        }
+
         // ===== UNIT SPRITE SYSTEM =====
         // Dark-fairy-tale SVG sprites for each of the 9 unit types.
         // Each template takes a {TEAM} color (P1 blue or P2 red) and bakes it into
@@ -425,6 +450,9 @@
                 this.gameMode = null;
                 this.difficulty = 'Medium'; // Easy, Medium, Hard
                 this.budget = 6;
+                this.playerName = '';       // entered before AI/Campaign games for leaderboard
+                this.nameInput = '';        // buffer while typing name
+                this.lastScore = null;      // {total, breakdown} from most recent game
                 // "The Culling" — turn number at which every surviving unit
                 // starts bleeding out (25% maxHp damage per turn). Host picks
                 // this on the BUDGET screen alongside tokens. Lower = faster
@@ -505,6 +533,19 @@
             getPlannedUnitAt(r, c) {
                 for (let u of [...this.p1Units, ...this.p2Units]) {
                     if (u.plannedR === r && u.plannedC === c) return u;
+                }
+                return null;
+            }
+
+            // AI-safe version: uses planned positions for P2 (AI's own team)
+            // but current positions for P1 (the player). Prevents the AI from
+            // peeking at the player's submitted move orders.
+            getAIVisibleUnitAt(r, c) {
+                for (let u of this.p2Units) {
+                    if (u.plannedR === r && u.plannedC === c) return u;
+                }
+                for (let u of this.p1Units) {
+                    if (u.r === r && u.c === c) return u;
                 }
                 return null;
             }
@@ -939,6 +980,15 @@
                 let origPos = new Map();
                 for (let u of allUnits) origPos.set(u, {r: u.r, c: u.c});
 
+                // Pre-action snapshot: capture where every unit is and where
+                // they plan to move, for the post-action review overlay.
+                this._preActionSnapshot = allUnits.map(u => ({
+                    type: u.type, player: u.player, hp: u.hp, maxHp: u.maxHp,
+                    r: u.r, c: u.c,
+                    plannedR: u.plannedR, plannedC: u.plannedC,
+                    plannedAtk: u.plannedAtk ? {...u.plannedAtk} : null
+                }));
+
                 // Fresh damage log for this turn. hit() and the culling tick
                 // push into this; buildAnimationFromResolution drains it and
                 // hands it to drawActionAnim for floating damage numbers.
@@ -1210,19 +1260,20 @@
                         for (let i = 1; i < units.length; i++) {
                             let u = units[i];
                             if (stationaryAt[key] === u) {
-                                // Stationary defender lost to heavy charger — bump
+                                // Stationary defender — check if their back is to the
+                                // board edge. If the natural push direction goes off-board,
+                                // the defender holds and the attacker bounces back.
                                 let attOrig = origPos.get(winner);
-                                let bump = this.findBumpDestination(u, cr, cc, attOrig.r, attOrig.c, claimed);
-                                if (bump) {
-                                    u.plannedR = bump[0];
-                                    u.plannedC = bump[1];
-                                    claimed.add(`${bump[0]},${bump[1]}`);
-                                    bounced.add(u);
-                                } else {
-                                    // No room to push — defender holds the edge.
-                                    // The attacker bounces back instead. Defender
-                                    // takes trample-equivalent damage for the impact
-                                    // but keeps their tile.
+                                let pushDR = cr - attOrig.r;
+                                let pushDC = cc - attOrig.c;
+                                if (pushDR !== 0) pushDR = pushDR > 0 ? 1 : -1;
+                                if (pushDC !== 0) pushDC = pushDC > 0 ? 1 : -1;
+                                let pushR = cr + pushDR, pushC = cc + pushDC;
+                                let edgeHold = (pushR < 0 || pushR >= ROWS || pushC < 0 || pushC >= COLS);
+
+                                if (edgeHold) {
+                                    // Defender holds the edge — attacker bounces back.
+                                    // Defender takes trample-equivalent damage for the impact.
                                     let winOrig = origPos.get(winner);
                                     winner.plannedR = winOrig.r;
                                     winner.plannedC = winOrig.c;
@@ -1234,6 +1285,27 @@
                                         this.combatLog.push(`${tName} ${u.type} holds edge — ${wName} ${winner.type} bounces back`);
                                     }
                                     break; // contest resolved — winner bounced
+                                }
+                                // Not at edge — normal bump
+                                let bump = this.findBumpDestination(u, cr, cc, attOrig.r, attOrig.c, claimed);
+                                if (bump) {
+                                    u.plannedR = bump[0];
+                                    u.plannedC = bump[1];
+                                    claimed.add(`${bump[0]},${bump[1]}`);
+                                    bounced.add(u);
+                                } else {
+                                    // Surrounded — also holds (squeeze prevention)
+                                    let winOrig = origPos.get(winner);
+                                    winner.plannedR = winOrig.r;
+                                    winner.plannedC = winOrig.c;
+                                    bounced.add(winner);
+                                    this.hit(winner, u, true, 'Me', 1, 0, 'Edge impact');
+                                    if (this.combatLog) {
+                                        let tName = u.player === 1 ? 'P1' : 'P2';
+                                        let wName = winner.player === 1 ? 'P1' : 'P2';
+                                        this.combatLog.push(`${tName} ${u.type} holds — ${wName} ${winner.type} bounces back`);
+                                    }
+                                    break;
                                 }
                             } else {
                                 let orig = origPos.get(u);
@@ -2157,7 +2229,9 @@
                     moves,
                     attacks: animAttacks,
                     deadUnits,
-                    damages
+                    damages,
+                    combatLog: [...this.combatLog],
+                    preActionSnapshot: this._preActionSnapshot || []
                 };
 
                 // Populate the combat log div
@@ -2201,6 +2275,43 @@
                 // Draw (3) doesn't count — the rematch button re-plays the match.
             }
 
+            calculateScore() {
+                let winner = this.getGameOver();
+                if (winner !== 1) return null; // only score P1 wins
+                let survivors = this.p1Units.length;
+                let totalHp = this.p1Units.reduce((s, u) => s + u.hp, 0);
+                let spent = this.p1Units.reduce((s, u) => s + INVESTED[u.type], 0);
+                // Count unspent from the original budget. Dead units still count
+                // as spent (you bought them, they just died).
+                let allP1Invested = spent; // survivors
+                // We don't track dead P1 units, so estimate from budget
+                // Actually, we know the budget and what's left alive. The dead
+                // units were also purchased. Best proxy: budget was fully spent
+                // at shop time (common), so unspent = 0 in most cases.
+                // But if the player intentionally left tokens unspent, we should
+                // reward that. Track it properly:
+                let tokensSpent = 0;
+                // p1Units only has survivors. We need original roster cost.
+                // Store it at shop confirm time instead. For now, use budget.
+                let unspentTokens = Math.max(0, this.budget - (this._p1ShopSpent || this.budget));
+                let turnsUsed = this.turn;
+                let maxTurns = this.cullingTurn + 10; // generous cap
+                let unusedTurns = Math.max(0, maxTurns - turnsUsed);
+                let base = 1000;
+                let speedBonus = unusedTurns * 50;
+                let armyBonus = survivors * 100;
+                let hpBonus = totalHp * 10;
+                let tokenBonus = unspentTokens * 200;
+                let subtotal = base + speedBonus + armyBonus + hpBonus + tokenBonus;
+                let diffMult = this.difficulty === 'Easy' ? 1 : this.difficulty === 'Medium' ? 1.5 : 2;
+                let total = Math.round(subtotal * diffMult);
+                return {
+                    total, base, speedBonus, armyBonus, hpBonus, tokenBonus,
+                    diffMult, survivors, totalHp, unspentTokens, turnsUsed,
+                    unusedTurns, difficulty: this.difficulty, playerName: this.playerName
+                };
+            }
+
             nextPhase() {
                 // Remote mode uses a completely different, concurrent state
                 // machine: each client progresses through its own SHOP/PLACE/
@@ -2214,15 +2325,40 @@
                 let phases = ['BUDGET', 'SHOP_P1', 'HANDOFF_S', 'SHOP_P2', 'PLACE_P1', 'HANDOFF_P', 'PLACE_P2', 'PLAN_P1', 'HANDOFF_PP', 'PLAN_P2', 'READY_ACTION', 'ACTION_RESOLVE'];
                 let idx = phases.indexOf(this.phase);
 
-                if (this.phase === 'MENU') {
+                if (this.phase === 'MENU' || this.phase === 'NAME_ENTRY') {
                     idx = 0;
                 } else if (this.phase === 'ACTION_RESOLVE') {
                     if (this.getGameOver()) {
                         this.recordCampaignResult();
+                        // Calculate and save score for AI/Campaign wins
+                        let score = this.calculateScore();
+                        if (score) {
+                            this.lastScore = score;
+                            saveToLeaderboard(score);
+                        } else {
+                            this.lastScore = null;
+                        }
                         this.phase = 'GAME_OVER';
                         return;
                     }
-                    idx = phases.indexOf('PLAN_P1');
+                    this.phase = 'PLAN_P1';
+                    this.selectedUnit = null;
+                    this.planStep = null;
+                    for (let u of this.p1Units) {
+                        u.ordered = false;
+                        u.plannedR = null; u.plannedC = null;
+                        u.plannedAtk = null; u.plannedTrap = null;
+                        u.plannedBeacon = null; u.plannedAid = null;
+                        u.plannedStealth = false; u.plannedShadow = null;
+                        u.plannedChannel = false; u.plannedRain = null;
+                        u.plannedBlink = null;
+                    }
+                    // In AI mode, skip straight to P2 AI planning then resolve
+                    if (this.gameMode === 'AI' || this.gameMode === 'Campaign') {
+                        // PLAN_P1 is set — player will plan, then nextPhase
+                        // advances through HANDOFF_PP → PLAN_P2 (AI auto-plans) → READY_ACTION → ACTION_RESOLVE
+                    }
+                    return;
                 } else {
                     idx = (idx + 1) % phases.length;
                 }
@@ -2275,7 +2411,24 @@
                     }
                 } else if (this.phase === 'PLAN_P2') {
                     if (this.gameMode === 'AI' || this.gameMode === 'Campaign') {
+                        // Wipe P1's planned positions so the AI can't peek at
+                        // the player's orders through getPlannedUnitAt / resolveFireboltPath.
+                        // The plans are preserved on u.plannedR etc but we temporarily
+                        // stash and restore them around the AI call.
+                        let p1Stash = this.p1Units.map(u => ({
+                            plannedR: u.plannedR, plannedC: u.plannedC,
+                            plannedAtk: u.plannedAtk
+                        }));
+                        for (let u of this.p1Units) {
+                            u.plannedR = u.r; u.plannedC = u.c;
+                        }
                         this.aiPlan();
+                        // Restore P1's real plans for resolution
+                        this.p1Units.forEach((u, i) => {
+                            u.plannedR = p1Stash[i].plannedR;
+                            u.plannedC = p1Stash[i].plannedC;
+                            u.plannedAtk = p1Stash[i].plannedAtk;
+                        });
                         this.nextPhase();
                     } else {
                         this.selectedUnit = null;
@@ -2521,13 +2674,52 @@
                         budget -= 1;
                     }
                 } else {
-                    // Hard: strong synergy compositions
+                    // Hard: synergy compositions at various budget levels.
+                    // Each is [cost, units]. AI picks a random affordable one
+                    // then fills remaining budget with L1 units.
                     let comps = [
-                        ['Paladin', 'Rogue', 'Archer'],
-                        ['Archmage', 'Knight', 'Squire'],
-                        ['Paladin', 'Mage'],
+                        // 3-token comps (budget 3+)
+                        ['Knight'],
+                        ['Rogue'],
+                        ['Mage'],
+                        // 4-token comps (budget 4+)
+                        ['Knight', 'Archer'],
+                        ['Knight', 'Adept'],
+                        ['Rogue', 'Squire'],
+                        ['Mage', 'Adept'],
+                        // 5-token comps (budget 5+)
+                        ['Knight', 'Archer', 'Adept'],
+                        ['Knight', 'Squire', 'Squire'],
+                        ['Rogue', 'Mage'],
+                        // 6-token comps (budget 6+)
+                        ['Knight', 'Knight'],
+                        ['Knight', 'Rogue'],
+                        ['Knight', 'Mage'],
+                        ['Paladin'],
+                        ['Assassin'],
+                        ['Archmage'],
+                        // 7-token comps (budget 7+)
+                        ['Paladin', 'Adept'],
+                        ['Knight', 'Rogue', 'Adept'],
+                        ['Knight', 'Mage', 'Archer'],
+                        ['Assassin', 'Squire'],
+                        ['Archmage', 'Adept'],
+                        // 8-token comps (budget 8+)
+                        ['Knight', 'Knight', 'Squire', 'Squire'],
+                        ['Paladin', 'Archer', 'Adept'],
                         ['Knight', 'Rogue', 'Mage'],
+                        ['Assassin', 'Squire', 'Adept'],
+                        ['Archmage', 'Squire', 'Adept'],
+                        // 9-token comps (budget 9+)
+                        ['Paladin', 'Mage'],
+                        ['Paladin', 'Rogue'],
                         ['Assassin', 'Knight', 'Adept'],
+                        ['Archmage', 'Knight', 'Squire'],
+                        // 10+ token comps
+                        ['Paladin', 'Rogue', 'Archer'],
+                        ['Paladin', 'Knight', 'Adept'],
+                        ['Assassin', 'Knight', 'Rogue'],
+                        // 12-token comp
                         ['Paladin', 'Archmage'],
                     ];
                     // Filter to affordable
@@ -2598,14 +2790,21 @@
 
             aiPlanEasy() {
                 // Random movement and attack
+                let claimed = new Set();
                 for (let u of this.p2Units) {
                     let moves = this.getValidMoves(u);
-                    if (moves.length > 0) {
+                    // Filter out tiles claimed by a friendly
+                    let safe = moves.filter(([r,c]) => !claimed.has(`${r},${c}`));
+                    if (safe.length > 0) {
+                        let m = safe[Math.floor(Math.random() * safe.length)];
+                        u.plannedR = m[0]; u.plannedC = m[1];
+                    } else if (moves.length > 0) {
                         let m = moves[Math.floor(Math.random() * moves.length)];
                         u.plannedR = m[0]; u.plannedC = m[1];
                     } else {
                         u.plannedR = u.r; u.plannedC = u.c;
                     }
+                    claimed.add(`${u.plannedR},${u.plannedC}`);
                     this.aiAssignAttack(u);
                     u.ordered = true;
                 }
@@ -2613,12 +2812,14 @@
 
             aiPlanMedium() {
                 // Move toward nearest enemy, best attack
+                let claimed = new Set();
                 for (let u of this.p2Units) {
                     let moves = this.getValidMoves(u);
                     let bestMove = [u.r, u.c];
                     let minDist = 999;
                     for (let [mr, mc] of moves) {
                         let minD = 999;
+                        if (claimed.has(`${mr},${mc}`)) continue; // skip friendly-claimed tiles
                         for (let e of this.p1Units) {
                             let d = Math.max(Math.abs(e.r - mr), Math.abs(e.c - mc));
                             minD = Math.min(minD, d);
@@ -2626,6 +2827,7 @@
                         if (minD < minDist) { minDist = minD; bestMove = [mr, mc]; }
                     }
                     u.plannedR = bestMove[0]; u.plannedC = bestMove[1];
+                    claimed.add(`${bestMove[0]},${bestMove[1]}`);
                     this.aiAssignAttack(u);
                     u.ordered = true;
                 }
@@ -2638,6 +2840,10 @@
                 enemies.sort((a, b) => a.hp - b.hp);
                 let focusTarget = enemies.length > 0 ? enemies[0] : null;
 
+                // Track tiles claimed by already-planned friendlies so two
+                // units don't pile onto the same square.
+                let friendlyClaimed = new Set();
+
                 for (let u of this.p2Units) {
                     let moves = this.getValidMoves(u);
                     let isMelee = STATS[u.type].rng === 1;
@@ -2648,6 +2854,8 @@
                         let bestScore = -9999;
                         for (let [mr, mc] of moves) {
                             let score = 0;
+                            // Heavy penalty for stacking on a friendly's planned tile
+                            if (friendlyClaimed.has(`${mr},${mc}`)) score -= 200;
                             if (focusTarget) {
                                 let d = Math.abs(focusTarget.r - mr) + Math.abs(focusTarget.c - mc);
                                 score -= d * 10;
@@ -2670,6 +2878,8 @@
                         let bestScore = -9999;
                         for (let [mr, mc] of moves) {
                             let score = 0;
+                            // Heavy penalty for stacking on a friendly's planned tile
+                            if (friendlyClaimed.has(`${mr},${mc}`)) score -= 200;
                             let minEnemyCheb = 999;
                             for (let e of this.p1Units) {
                                 let d = Math.max(Math.abs(e.r - mr), Math.abs(e.c - mc));
@@ -2697,6 +2907,7 @@
                         }
                     }
                     u.plannedR = bestMove[0]; u.plannedC = bestMove[1];
+                    friendlyClaimed.add(`${bestMove[0]},${bestMove[1]}`);
 
                     // Hard AI: prioritize focus target for attack direction
                     this.aiAssignAttackHard(u, focusTarget);
@@ -2704,11 +2915,14 @@
                 }
             }
 
-            // Predict where enemy `e` will be at resolve-time. If they have a
-            // plannedR (in AI vs AI that's already set by the time this runs),
-            // use that; otherwise fall back to current position.
+            // Predict where enemy `e` will be at resolve-time. Only uses
+            // planned position for P2 units (the AI's own team). P1 planned
+            // positions are never read — the AI doesn't get to peek at the
+            // player's orders. In the ai_vs_ai headless harness both sides
+            // pre-seed plannedR to current position so this returns current
+            // position for unplanned enemies either way.
             predictEnemyTile(e) {
-                if (e.plannedR != null && e.plannedC != null) return {r: e.plannedR, c: e.plannedC};
+                if (e.player === 2 && e.plannedR != null && e.plannedC != null) return {r: e.plannedR, c: e.plannedC};
                 return {r: e.r, c: e.c};
             }
 
@@ -2716,7 +2930,7 @@
                 if (STATS[u.type].rng === 1) {
                     let atks = this.getValidAttacks(u, u.plannedR, u.plannedC);
                     for (let {r, c, dir} of atks) {
-                        let t = this.getPlannedUnitAt(r, c);
+                        let t = this.getAIVisibleUnitAt(r, c);
                         if (t && t.player === 1) {
                             let isCharge = this.isChargeMove(u, u.r, u.c, u.plannedR, u.plannedC);
                             u.plannedAtk = {r, c, damageType: null, isCharge, direction: dir};
@@ -3609,6 +3823,32 @@
                 }
                 drawList.sort((a, b) => (a.ar + a.ac) - (b.ar + b.ac));
 
+                // Movement trails: colored dashed lines from start to end for units that moved
+                for (let d of drawList) {
+                    if (d.startR === d.endR && d.startC === d.endC) continue;
+                    if (d.blinked) continue; // blink has its own sparkle effect
+                    let [sx, sy] = this.isoCenter(d.startR, d.startC);
+                    let [ex, ey] = this.isoCenter(d.endR, d.endC);
+                    let color = d.unit.player === 1 ? 'rgba(80,140,255,' : 'rgba(255,80,80,';
+                    // Trail fades in as movement progresses
+                    let trailAlpha = Math.min(1, moveT * 1.5);
+                    this.ctx.save();
+                    this.ctx.strokeStyle = color + (trailAlpha * 0.5) + ')';
+                    this.ctx.lineWidth = 3;
+                    this.ctx.setLineDash([6, 4]);
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(sx, sy - 15);
+                    this.ctx.lineTo(ex, ey - 15);
+                    this.ctx.stroke();
+                    // Origin dot
+                    this.ctx.fillStyle = color + (trailAlpha * 0.4) + ')';
+                    this.ctx.setLineDash([]);
+                    this.ctx.beginPath();
+                    this.ctx.arc(sx, sy - 15, 4, 0, Math.PI * 2);
+                    this.ctx.fill();
+                    this.ctx.restore();
+                }
+
                 // Fade window for dead units: start fading after moves finish
                 let fadeT = Math.max(0, Math.min(1, (t - 0.50) / 0.35));
 
@@ -3687,6 +3927,130 @@
                         this.ctx.textAlign = 'center';
                         this.ctx.fillText('Hover damage numbers for details · Click or press any key to continue', CANVAS_W / 2, CANVAS_H - 12);
                         this.ctx.restore();
+
+                        // Pre-action snapshot icon (👁) — hover to see planned moves overlay
+                        let snapIconX = CANVAS_W / 2, snapIconY = 14, snapR = 14;
+                        let snapHover = Math.sqrt((mouseCanvasX - snapIconX) ** 2 + (mouseCanvasY - snapIconY) ** 2) < snapR + 8;
+                        this.ctx.save();
+                        this.ctx.fillStyle = snapHover ? 'rgba(60,80,120,0.95)' : 'rgba(30,30,40,0.75)';
+                        this.ctx.beginPath();
+                        this.ctx.arc(snapIconX, snapIconY, snapR, 0, Math.PI * 2);
+                        this.ctx.fill();
+                        this.ctx.strokeStyle = snapHover ? '#b0f0ff' : '#706a64';
+                        this.ctx.lineWidth = 1.5;
+                        this.ctx.stroke();
+                        this.ctx.fillStyle = snapHover ? '#fff' : '#b2aca4';
+                        this.ctx.font = '14px Arial';
+                        this.ctx.textAlign = 'center';
+                        this.ctx.textBaseline = 'middle';
+                        this.ctx.fillText('👁', snapIconX, snapIconY);
+                        this.ctx.restore();
+
+                        // Draw planned moves overlay when hovering the snapshot icon
+                        if (snapHover && anim.preActionSnapshot && anim.preActionSnapshot.length > 0) {
+                            // Dim the board
+                            this.ctx.save();
+                            this.ctx.fillStyle = 'rgba(0,0,0,0.45)';
+                            this.ctx.fillRect(0, 30, CANVAS_W, UI_TOP - 30);
+                            // Draw each unit at its pre-action position with an arrow to planned destination
+                            for (let snap of anim.preActionSnapshot) {
+                                if (snap.r == null) continue;
+                                let [sx, sy] = this.isoCenter(snap.r, snap.c);
+                                let color = snap.player === 1 ? P1_COLOR : P2_COLOR;
+                                let lightColor = snap.player === 1 ? 'rgba(80,140,255,' : 'rgba(255,80,80,';
+                                // Unit dot at current position
+                                this.ctx.fillStyle = color;
+                                this.ctx.beginPath();
+                                this.ctx.arc(sx, sy - 8, 8, 0, Math.PI * 2);
+                                this.ctx.fill();
+                                this.ctx.strokeStyle = '#fff';
+                                this.ctx.lineWidth = 1;
+                                this.ctx.stroke();
+                                // Unit type label
+                                this.ctx.fillStyle = '#fff';
+                                this.ctx.font = 'bold 9px Arial';
+                                this.ctx.textAlign = 'center';
+                                this.ctx.textBaseline = 'middle';
+                                this.ctx.fillText(snap.type.slice(0, 3), sx, sy - 8);
+                                // Arrow to planned destination if they moved
+                                if (snap.plannedR != null && (snap.plannedR !== snap.r || snap.plannedC !== snap.c)) {
+                                    let [ex, ey] = this.isoCenter(snap.plannedR, snap.plannedC);
+                                    this.ctx.strokeStyle = lightColor + '0.8)';
+                                    this.ctx.lineWidth = 2;
+                                    this.ctx.setLineDash([4, 3]);
+                                    this.ctx.beginPath();
+                                    this.ctx.moveTo(sx, sy - 8);
+                                    this.ctx.lineTo(ex, ey - 8);
+                                    this.ctx.stroke();
+                                    this.ctx.setLineDash([]);
+                                    // Arrowhead
+                                    let dx = ex - sx, dy = (ey - 8) - (sy - 8);
+                                    let len = Math.hypot(dx, dy) || 1;
+                                    let ux = dx / len, uy = dy / len;
+                                    this.ctx.fillStyle = lightColor + '0.8)';
+                                    this.ctx.beginPath();
+                                    this.ctx.moveTo(ex, ey - 8);
+                                    this.ctx.lineTo(ex - ux * 8 - uy * 4, ey - 8 - uy * 8 + ux * 4);
+                                    this.ctx.lineTo(ex - ux * 8 + uy * 4, ey - 8 - uy * 8 - ux * 4);
+                                    this.ctx.fill();
+                                }
+                                // Attack indicator — bright crosshair at target
+                                if (snap.plannedAtk) {
+                                    let fromR = snap.plannedR != null ? snap.plannedR : snap.r;
+                                    let fromC = snap.plannedC != null ? snap.plannedC : snap.c;
+                                    let [fx, fy] = this.isoCenter(fromR, fromC);
+                                    let atkColor = '#ff4040';
+                                    let atkGlow = 'rgba(255,60,60,0.3)';
+                                    let targetTile = null;
+                                    if (snap.plannedAtk.targetR != null) {
+                                        targetTile = [snap.plannedAtk.targetR, snap.plannedAtk.targetC];
+                                    } else if (snap.plannedAtk.direction) {
+                                        let [dr, dc] = snap.plannedAtk.direction;
+                                        targetTile = [fromR + dr, fromC + dc];
+                                    } else if (snap.plannedAtk.r != null && snap.plannedAtk.c != null) {
+                                        targetTile = [snap.plannedAtk.r, snap.plannedAtk.c];
+                                    }
+                                    if (targetTile) {
+                                        let [tx, ty] = this.isoCenter(targetTile[0], targetTile[1]);
+                                        // Glow line from unit to target
+                                        this.ctx.strokeStyle = atkGlow;
+                                        this.ctx.lineWidth = 6;
+                                        this.ctx.beginPath();
+                                        this.ctx.moveTo(fx, fy - 8);
+                                        this.ctx.lineTo(tx, ty - 8);
+                                        this.ctx.stroke();
+                                        // Bright line
+                                        this.ctx.strokeStyle = atkColor;
+                                        this.ctx.lineWidth = 2;
+                                        this.ctx.beginPath();
+                                        this.ctx.moveTo(fx, fy - 8);
+                                        this.ctx.lineTo(tx, ty - 8);
+                                        this.ctx.stroke();
+                                        // Crosshair at target
+                                        let ch = 7;
+                                        this.ctx.strokeStyle = atkColor;
+                                        this.ctx.lineWidth = 2;
+                                        this.ctx.beginPath();
+                                        this.ctx.moveTo(tx - ch, ty - 8);
+                                        this.ctx.lineTo(tx + ch, ty - 8);
+                                        this.ctx.moveTo(tx, ty - 8 - ch);
+                                        this.ctx.lineTo(tx, ty - 8 + ch);
+                                        this.ctx.stroke();
+                                        // Outer ring
+                                        this.ctx.beginPath();
+                                        this.ctx.arc(tx, ty - 8, 10, 0, Math.PI * 2);
+                                        this.ctx.stroke();
+                                    }
+                                }
+                            }
+                            // Legend
+                            this.ctx.fillStyle = 'rgba(200,200,200,0.9)';
+                            this.ctx.font = '11px Arial';
+                            this.ctx.textAlign = 'center';
+                            this.ctx.fillText('Pre-action plan: dashed lines = movement, solid lines = attacks', CANVAS_W / 2, UI_TOP - 8);
+                            this.ctx.restore();
+                        }
+
                         // Highlight attackers when hovering a damage marker
                         if (hoveredDmg) {
                             let pulse = 0.6 + 0.4 * Math.sin(performance.now() / 200);
@@ -4072,6 +4436,8 @@
 
                 if (game.phase === 'MENU') {
                     this.drawMenu(game);
+                } else if (game.phase === 'NAME_ENTRY') {
+                    this.drawNameEntry(game);
                 } else if (game.phase === 'TUTORIAL') {
                     this.drawTutorial(game);
                 } else if (game.phase === 'REMOTE_SETUP') {
@@ -4105,22 +4471,53 @@
                 } else if (game.phase === 'READY_ACTION') {
                     this.drawReady(game);
                 } else if (game.phase === 'ACTION_RESOLVE') {
-                    this.ctx.fillStyle = '#eeeeee';
-                    this.ctx.font = 'bold 22px Arial';
-                    this.ctx.textAlign = 'center';
-                    this.ctx.fillText('⚔  Battle resolving...  ⚔', CANVAS_W / 2, UI_TOP + 60);
-                    // Progress bar
-                    if (game.animation) {
-                        let elapsed = performance.now() - game.animation.startTime;
-                        let pct = Math.min(1, elapsed / game.animation.duration);
-                        let barX = CANVAS_W / 2 - 180, barY = UI_TOP + 100, barW = 360, barH = 18;
-                        this.ctx.fillStyle = '#2a2a2a';
-                        this.ctx.fillRect(barX, barY, barW, barH);
-                        this.ctx.fillStyle = '#af2626';
-                        this.ctx.fillRect(barX, barY, barW * pct, barH);
-                        this.ctx.strokeStyle = '#6080c0';
-                        this.ctx.lineWidth = 1;
-                        this.ctx.strokeRect(barX, barY, barW, barH);
+                    if (game.animation && game.animation.paused) {
+                        // PAUSED: show turn recap in the UI panel
+                        this.ctx.fillStyle = '#ffd84a';
+                        this.ctx.font = 'bold 16px Arial';
+                        this.ctx.textAlign = 'center';
+                        this.ctx.fillText('⚔  Turn Recap  ⚔', CANVAS_W / 2, UI_TOP + 24);
+                        // Combat log lines
+                        let log = game.animation.combatLog || [];
+                        let logY = UI_TOP + 42;
+                        let lineH = 14;
+                        let maxLines = Math.floor((CANVAS_H - logY - 20) / lineH);
+                        this.ctx.font = '11px Arial';
+                        this.ctx.textAlign = 'left';
+                        for (let i = 0; i < Math.min(log.length, maxLines); i++) {
+                            let line = log[i];
+                            // Color-code by player
+                            if (line.startsWith('P1')) this.ctx.fillStyle = '#7aa8ff';
+                            else if (line.startsWith('P2')) this.ctx.fillStyle = '#ff8888';
+                            else this.ctx.fillStyle = '#b2aca4';
+                            this.ctx.fillText(line, 10, logY + i * lineH);
+                        }
+                        if (log.length > maxLines) {
+                            this.ctx.fillStyle = '#888';
+                            this.ctx.fillText(`... and ${log.length - maxLines} more`, 10, logY + maxLines * lineH);
+                        }
+                        if (log.length === 0) {
+                            this.ctx.fillStyle = '#888';
+                            this.ctx.fillText('No combat this turn.', 10, logY);
+                        }
+                    } else {
+                        // ANIMATING: show progress bar
+                        this.ctx.fillStyle = '#eeeeee';
+                        this.ctx.font = 'bold 22px Arial';
+                        this.ctx.textAlign = 'center';
+                        this.ctx.fillText('⚔  Battle resolving...  ⚔', CANVAS_W / 2, UI_TOP + 60);
+                        if (game.animation) {
+                            let elapsed = performance.now() - game.animation.startTime;
+                            let pct = Math.min(1, elapsed / game.animation.duration);
+                            let barX = CANVAS_W / 2 - 180, barY = UI_TOP + 100, barW = 360, barH = 18;
+                            this.ctx.fillStyle = '#2a2a2a';
+                            this.ctx.fillRect(barX, barY, barW, barH);
+                            this.ctx.fillStyle = '#af2626';
+                            this.ctx.fillRect(barX, barY, barW * pct, barH);
+                            this.ctx.strokeStyle = '#6080c0';
+                            this.ctx.lineWidth = 1;
+                            this.ctx.strokeRect(barX, barY, barW, barH);
+                        }
                     }
                 } else if (game.phase === 'GAME_OVER') {
                     this.drawGameOver(game);
@@ -4169,6 +4566,19 @@
                 // Tooltip on hover
                 if (hovered) {
                     const UPDATES = [
+                        {ver: 'v0.9', items: [
+                            'Scoring system: speed, army, HP, and token bonuses with difficulty multiplier',
+                            'Local leaderboard: top 10 per difficulty, saved in browser',
+                            'Name entry before AI/Campaign games',
+                        ]},
+                        {ver: 'v0.8', items: [
+                            'Turn recap panel: combat log shown during damage pause',
+                            'Movement trails during action animation',
+                            'Pre-action snapshot: hover 👁 icon to see all planned moves',
+                            'Edge-hold: units backed against the board edge can\'t be displaced',
+                            'Phalanx aura: visual glow for 3+ Squires in a line',
+                            'Fixed culling to use remaining HP instead of max HP',
+                        ]},
                         {ver: 'v0.7', items: [
                             'Balance: Knight Melee 10→8, Paladin Melee 14→12, Adept Magic 5→6',
                             'New Archer passive: Readied Shot — auto half-damage vs adjacent armored units',
@@ -4229,6 +4639,38 @@
                     }
                     this.ctx.restore();
                 }
+            }
+
+            drawNameEntry(game) {
+                let cx = CANVAS_W / 2;
+                this.ctx.fillStyle = '#eeeeee';
+                this.ctx.font = 'bold 22px Arial';
+                this.ctx.textAlign = 'center';
+                this.ctx.fillText('Enter Your Name', cx, UI_TOP + 50);
+                this.ctx.fillStyle = '#b2aca4';
+                this.ctx.font = '14px Arial';
+                this.ctx.fillText('For the leaderboard — 16 characters max', cx, UI_TOP + 75);
+                // Input box
+                let boxW = 320, boxH = 48;
+                let boxX = cx - boxW / 2, boxY = UI_TOP + 95;
+                this.ctx.fillStyle = '#1a1a2a';
+                this.ctx.fillRect(boxX, boxY, boxW, boxH);
+                this.ctx.strokeStyle = '#6080c0';
+                this.ctx.lineWidth = 2;
+                this.ctx.strokeRect(boxX, boxY, boxW, boxH);
+                // Typed text with blinking cursor
+                let typed = game.nameInput || '';
+                let cursor = Math.floor(performance.now() / 500) % 2 === 0 ? '|' : '';
+                this.ctx.fillStyle = '#ffffff';
+                this.ctx.font = 'bold 22px Arial';
+                this.ctx.textAlign = 'center';
+                this.ctx.fillText(typed + cursor, cx, boxY + 32);
+                // Buttons
+                let canConfirm = typed.trim().length > 0;
+                this.drawButton(game, 'name_confirm', cx - 120, UI_TOP + 170, 240, 44,
+                    'Start Game →', {color: canConfirm ? '#46a046' : '#2a2a2a', enabled: canConfirm, font: 'bold 16px Arial'});
+                this.drawButton(game, 'name_back', cx - 80, UI_TOP + 230, 160, 36,
+                    '← Back', {color: '#555', font: 'bold 14px Arial'});
             }
 
             // ================= TUTORIAL =================
@@ -7549,35 +7991,95 @@
             drawGameOver(game) {
                 let cx = CANVAS_W / 2;
                 let winner = game.p1Units.length > 0 ? 1 : (game.p2Units.length > 0 ? 2 : 0);
+                let sc = game.lastScore;
                 this.ctx.fillStyle = '#eeeeee';
-                this.ctx.font = 'bold 24px Arial';
+                this.ctx.font = 'bold 22px Arial';
                 this.ctx.textAlign = 'center';
+
+                // Title
                 if (game.gameMode === 'Campaign') {
-                    this.ctx.fillText(winner === 0 ? 'DRAW!' : `Player ${winner} wins match ${game.campaignMatch}!`, cx, UI_TOP + 45);
-                    this.ctx.font = '16px Arial';
+                    this.ctx.fillText(winner === 0 ? 'DRAW!' : `Player ${winner} wins match ${game.campaignMatch}!`, cx, UI_TOP + 28);
+                    this.ctx.font = '14px Arial';
                     this.ctx.fillStyle = '#b2aca4';
-                    this.ctx.fillText(`Score: You ${game.campaignScore[0]} — ${game.campaignScore[1]} AI`, cx, UI_TOP + 75);
+                    this.ctx.fillText(`Campaign: You ${game.campaignScore[0]} — ${game.campaignScore[1]} AI`, cx, UI_TOP + 48);
+                } else {
+                    let title = winner === 0 ? 'DRAW!' : winner === 1 ? 'VICTORY!' : 'DEFEAT!';
+                    this.ctx.fillStyle = winner === 1 ? '#46d246' : winner === 2 ? '#ff4444' : '#b2aca4';
+                    this.ctx.fillText(title, cx, UI_TOP + 30);
+                }
+
+                // Score breakdown (only for P1 wins in AI/Campaign)
+                let yOff = UI_TOP + 60;
+                if (sc) {
+                    this.ctx.fillStyle = '#ffd84a';
+                    this.ctx.font = 'bold 28px Arial';
+                    this.ctx.fillText(`${sc.total} pts`, cx, yOff);
+                    yOff += 22;
+                    this.ctx.font = '11px Arial';
+                    this.ctx.fillStyle = '#b2aca4';
+                    let lines = [
+                        `Base: ${sc.base}`,
+                        `Speed: +${sc.speedBonus} (${sc.unusedTurns} unused turns × 50)`,
+                        `Army: +${sc.armyBonus} (${sc.survivors} survivors × 100)`,
+                        `HP: +${sc.hpBonus} (${sc.totalHp} remaining × 10)`,
+                        `Tokens: +${sc.tokenBonus} (${sc.unspentTokens} unspent × 200)`,
+                        `Difficulty: ×${sc.diffMult} (${sc.difficulty})`
+                    ];
+                    for (let line of lines) {
+                        this.ctx.fillText(line, cx, yOff);
+                        yOff += 14;
+                    }
+                    yOff += 6;
+
+                    // Leaderboard
+                    let board = getLeaderboard(sc.difficulty);
+                    if (board.length > 0) {
+                        this.ctx.fillStyle = '#9af0ff';
+                        this.ctx.font = 'bold 12px Arial';
+                        this.ctx.fillText(`Leaderboard — ${sc.difficulty}`, cx, yOff);
+                        yOff += 16;
+                        this.ctx.font = '10px Arial';
+                        this.ctx.textAlign = 'left';
+                        let lbX = cx - 160;
+                        for (let i = 0; i < board.length; i++) {
+                            let e = board[i];
+                            let isMe = e.name === sc.playerName && e.score === sc.total;
+                            this.ctx.fillStyle = isMe ? '#ffd84a' : '#b2aca4';
+                            let rank = `${i + 1}.`.padEnd(4);
+                            let name = e.name.padEnd(18);
+                            let pts = `${e.score} pts`;
+                            this.ctx.fillText(`${rank}${name}${pts}    ${e.date}`, lbX, yOff);
+                            yOff += 13;
+                        }
+                        this.ctx.textAlign = 'center';
+                    }
+                } else if (winner !== 1 && (game.gameMode === 'AI' || game.gameMode === 'Campaign')) {
+                    this.ctx.fillStyle = '#888';
+                    this.ctx.font = '13px Arial';
+                    this.ctx.fillText('No score — only victories earn points!', cx, yOff);
+                    yOff += 20;
+                }
+
+                // Buttons
+                yOff = Math.max(yOff + 8, UI_TOP + 340);
+                if (game.gameMode === 'Campaign') {
                     let neededToWin = Math.ceil(game.campaignTotal / 2);
                     if (game.campaignScore[0] >= neededToWin) {
                         this.ctx.fillStyle = '#46d246';
-                        this.ctx.font = 'bold 22px Arial';
-                        this.ctx.fillText('🏆 CAMPAIGN VICTORY! 🏆', cx, UI_TOP + 115);
-                        this.drawButton(game, 'new_game', cx - 110, UI_TOP + 140, 220, 44, 'New Game', {color: '#46a046'});
+                        this.ctx.font = 'bold 18px Arial';
+                        this.ctx.fillText('CAMPAIGN VICTORY!', cx, yOff);
+                        this.drawButton(game, 'new_game', cx - 110, yOff + 10, 220, 40, 'New Game', {color: '#46a046'});
                     } else if (game.campaignScore[1] >= neededToWin) {
                         this.ctx.fillStyle = '#ff4444';
-                        this.ctx.font = 'bold 22px Arial';
-                        this.ctx.fillText('✗ CAMPAIGN DEFEAT ✗', cx, UI_TOP + 115);
-                        this.drawButton(game, 'new_game', cx - 110, UI_TOP + 140, 220, 44, 'New Game', {color: '#46a046'});
+                        this.ctx.font = 'bold 18px Arial';
+                        this.ctx.fillText('CAMPAIGN DEFEAT', cx, yOff);
+                        this.drawButton(game, 'new_game', cx - 110, yOff + 10, 220, 40, 'New Game', {color: '#46a046'});
                     } else {
-                        this.ctx.fillStyle = '#46d246';
-                        this.ctx.font = '14px Arial';
-                        this.ctx.fillText(`Next match: ${game.campaignMatch + 2} token budget`, cx, UI_TOP + 110);
-                        this.drawButton(game, 'next_match', cx - 240, UI_TOP + 140, 230, 44, 'Next Match →', {color: '#46a046'});
-                        this.drawButton(game, 'new_game', cx + 10, UI_TOP + 140, 230, 44, 'Quit Campaign', {color: '#7a3a3a'});
+                        this.drawButton(game, 'next_match', cx - 240, yOff, 230, 40, 'Next Match →', {color: '#46a046'});
+                        this.drawButton(game, 'new_game', cx + 10, yOff, 230, 40, 'Quit Campaign', {color: '#7a3a3a'});
                     }
                 } else {
-                    this.ctx.fillText(winner === 0 ? 'DRAW!' : `Player ${winner} WINS!`, cx, UI_TOP + 60);
-                    this.drawButton(game, 'new_game', cx - 160, UI_TOP + 100, 320, 50, 'New Game →', {color: '#46a046', font: 'bold 18px Arial'});
+                    this.drawButton(game, 'new_game', cx - 160, yOff, 320, 44, 'New Game →', {color: '#46a046', font: 'bold 16px Arial'});
                 }
             }
 
@@ -8177,17 +8679,33 @@
             }
             if (key === 'mode_ai') {
                 game.gameMode = 'AI';
-                game.nextPhase();
+                game.nameInput = game.playerName || '';
+                game.phase = 'NAME_ENTRY';
                 return true;
             }
             if (key === 'mode_campaign') {
                 game.gameMode = 'Campaign';
                 game.campaignMatch = 1;
                 game.campaignScore = [0, 0];
-                game.budget = 3; // match 1 = budget 3
-                game.phase = 'SHOP_P1';
-                game.selectedUnit = null;
-                game.planStep = null;
+                game.nameInput = game.playerName || '';
+                game.phase = 'NAME_ENTRY';
+                return true;
+            }
+            // ---- NAME ENTRY ----
+            if (key === 'name_confirm') {
+                game.playerName = (game.nameInput || 'Player').trim().slice(0, 16) || 'Player';
+                if (game.gameMode === 'Campaign') {
+                    game.budget = 3;
+                    game.phase = 'SHOP_P1';
+                    game.selectedUnit = null;
+                    game.planStep = null;
+                } else {
+                    game.nextPhase(); // → BUDGET
+                }
+                return true;
+            }
+            if (key === 'name_back') {
+                game.phase = 'MENU';
                 return true;
             }
             if (key === 'mode_tutorial') {
@@ -8325,6 +8843,9 @@
             }
             if (key === 'shop_confirm') {
                 let units = game.phase === 'SHOP_P1' ? game.p1Units : game.p2Units;
+                if (game.phase === 'SHOP_P1') {
+                    game._p1ShopSpent = units.reduce((s, u) => s + INVESTED[u.type], 0);
+                }
                 if (units.length > 0) game.nextPhase();
                 return true;
             }
@@ -9421,6 +9942,25 @@
                 game.animation = null;
                 game.nextPhase();
                 return;
+            }
+            // Name entry typing
+            if (game.phase === 'NAME_ENTRY') {
+                if (e.key === 'Backspace') {
+                    game.nameInput = (game.nameInput || '').slice(0, -1);
+                    e.preventDefault(); return;
+                } else if (e.key === 'Enter') {
+                    if ((game.nameInput || '').trim().length > 0) {
+                        handleButtonClick(game, 'name_confirm');
+                    }
+                    e.preventDefault(); return;
+                } else if (e.key === 'Escape') {
+                    game.phase = 'MENU';
+                    e.preventDefault(); return;
+                } else if (e.key.length === 1 && (game.nameInput || '').length < 16) {
+                    game.nameInput = (game.nameInput || '') + e.key;
+                    e.preventDefault(); return;
+                }
+                e.preventDefault(); return;
             }
             // Remote setup: join-code typing
             if (game.phase === 'REMOTE_JOIN') {

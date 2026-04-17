@@ -10,7 +10,8 @@
       "Bash(git commit -m ' *)",
       "Bash(/opt/homebrew/bin/gh auth *)",
       "Bash(open *)",
-      "Bash(node *)"
+      "Bash(node *)",
+      "Bash(/opt/homebrew/bin/gh api *)"
     ]
   }
 }
