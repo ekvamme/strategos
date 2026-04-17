@@ -82,8 +82,8 @@
             Rogue:    {hp:12, mov:2, cost:2, weight:1, rng:3, tileTarget:true,  blocks:false, firebolt:false, diag_move:false, diag_atk:true,  cleave:0, atk_type:'Piercing', atk:{P:8,Me:3,Ex:9,Ma:1}, dfn:{P:5,Me:3,Ex:6,Ma:3}},
             Assassin: {hp:14, mov:3, cost:3, weight:1, rng:3, tileTarget:true,  blocks:false, firebolt:false, diag_move:true,  diag_atk:true,  cleave:0, atk_type:'Piercing', atk:{P:10,Me:5,Ex:2,Ma:1}, dfn:{P:6,Me:4,Ex:5,Ma:5}},
             Squire:   {hp:12, mov:1, cost:1, weight:3, rng:1, tileTarget:false, blocks:true,  firebolt:false, diag_move:false, diag_atk:false, cleave:0, atk_type:'Melee',    atk:{P:1,Me:5,Ex:1,Ma:1}, dfn:{P:4,Me:5,Ex:3,Ma:2}},
-            Knight:   {hp:22, mov:2, cost:2, weight:3, rng:1, tileTarget:false, blocks:true,  firebolt:false, diag_move:false, diag_atk:true,  cleave:1, atk_type:'Melee',    atk:{P:2,Me:8,Ex:1,Ma:1}, dfn:{P:7,Me:8,Ex:5,Ma:3}},
-            Paladin:  {hp:28, mov:2, cost:3, weight:3, rng:1, tileTarget:false, blocks:true,  firebolt:false, diag_move:false, diag_atk:true,  cleave:4, atk_type:'Melee',    atk:{P:3,Me:12,Ex:1,Ma:2}, dfn:{P:9,Me:10,Ex:7,Ma:4}},
+            Knight:   {hp:22, mov:2, cost:2, weight:3, rng:1, tileTarget:false, blocks:true,  firebolt:false, diag_move:false, diag_atk:true,  cleave:1, atk_type:'Melee',    atk:{P:2,Me:8,Ex:1,Ma:1}, dfn:{P:7,Me:6,Ex:5,Ma:3}},
+            Paladin:  {hp:28, mov:2, cost:3, weight:3, rng:1, tileTarget:false, blocks:true,  firebolt:false, diag_move:false, diag_atk:true,  cleave:4, atk_type:'Melee',    atk:{P:3,Me:12,Ex:1,Ma:2}, dfn:{P:9,Me:8,Ex:7,Ma:4}},
             Adept:    {hp:10, mov:1, cost:1, weight:2, rng:3, tileTarget:false, blocks:false, firebolt:true,  diag_move:true,  diag_atk:true,  cleave:0, atk_type:'Magic',    atk:{P:1,Me:1,Ex:1,Ma:6}, dfn:{P:2,Me:2,Ex:3,Ma:5}},
             Mage:     {hp:14, mov:2, cost:2, weight:2, rng:3, tileTarget:true,  blocks:false, firebolt:true,  diag_move:true,  diag_atk:true,  cleave:0, atk_type:'Magic',    atk:{P:1,Me:1,Ex:1,Ma:10}, dfn:{P:3,Me:2,Ex:4,Ma:8}},
             Archmage: {hp:18, mov:2, cost:3, weight:2, rng:4, tileTarget:true,  blocks:false, firebolt:true,  diag_move:true,  diag_atk:true,  cleave:0, atk_type:'Magic',    atk:{P:1,Me:2,Ex:1,Ma:14}, dfn:{P:4,Me:3,Ex:5,Ma:10}}
@@ -611,20 +611,16 @@
                             if (nr >= 0 && nr < ROWS && nc >= 0 && nc < COLS) {
                                 let key = `${nr},${nc}`;
                                 if (visited.has(key)) continue;
-                                // Dest tile: a friendly blocks the charge; an enemy is
-                                // allowed — the charge-defense + collision passes will
-                                // contest it (charger bumps lighter enemies off the
-                                // tile, ties/heavier defenders resolve via HP).
-                                let dest = this.getUnitAt(nr, nc);
-                                if (dest && dest.player === unit.player) continue;
-                                // Mid-tile must not be occupied by a friendly OR by an
-                                // equal-weight (K/P) unit. Lighter enemies can still be
-                                // trampled, but you can't crash through your own people
-                                // or another heavy.
+                                // Dest tile: allow charging to any tile, even if a
+                                // friendly is there (they may move away — simultaneous
+                                // planning). Collision resolution handles conflicts.
+                                // Mid-tile check: allow charging through friendlies
+                                // (they may move away this turn — simultaneous planning).
+                                // Block only if an enemy of equal or greater weight is
+                                // on the mid-tile (can't trample another heavy).
                                 let midR = r + dr / 2, midC = c + dc / 2;
                                 let mid = this.getUnitAt(midR, midC);
-                                if (mid) {
-                                    if (mid.player === unit.player) continue;
+                                if (mid && mid.player !== unit.player) {
                                     if (STATS[mid.type].weight >= STATS[unit.type].weight) continue;
                                 }
                                 visited.add(key);
@@ -726,9 +722,14 @@
                     phalanxDef = 2;
                 }
                 let rawAtk = STATS[att.type].atk[damageType];
+                // Dark Conclave: +3 Magic for Adepts in a triangle
+                let conclaveBonus = 0;
+                if (att.type === 'Adept' && att._darkConclave && damageType === 'Ma') {
+                    conclaveBonus = 3;
+                }
                 let rawDfn = STATS[tgt.type].dfn[damageType];
                 let totalDfn = rawDfn + aurBonus + lastStandDef + phalanxDef;
-                let dmg = Math.max(1, rawAtk - totalDfn);
+                let dmg = Math.max(1, (rawAtk + conclaveBonus) - totalDfn);
                 dmg = Math.floor(dmg * (multiplier || 1));
                 if (halved) dmg = Math.max(1, Math.floor(dmg / 2));
                 if (flatBonus) dmg += flatBonus;
@@ -740,8 +741,9 @@
                 if (this.combatLog) {
                     let pName = att.player === 1 ? 'P1' : 'P2';
                     let tName = tgt.player === 1 ? 'P1' : 'P2';
-                    let mathParts = [`${rawAtk} atk(${damageType}) - ${rawDfn} dfn(${damageType})`];
+                    let mathParts = [`${rawAtk}${conclaveBonus ? '+'+conclaveBonus : ''} atk(${damageType}) - ${rawDfn} dfn(${damageType})`];
                     let amps = [];
+                    if (conclaveBonus) { amps.push('Dark Conclave'); }
                     if (aurBonus) { mathParts.push(`- ${aurBonus} aura`); amps.push('Paladin Aura'); }
                     if (lastStandDef) { mathParts.push(`- ${lastStandDef} Last Stand`); amps.push('Last Stand'); }
                     if (phalanxDef) { mathParts.push(`- ${phalanxDef} Phalanx`); amps.push('Phalanx'); }
@@ -874,6 +876,61 @@
                         while (posMap[`${r + vD + 1},${c}`]) vD++;
                         if (vU + vD + 1 >= 3) {
                             if (!s._activeSynergies.includes('Phalanx')) s._activeSynergies.push('Phalanx');
+                        }
+                    }
+                }
+
+                // DARK CONCLAVE: 3 friendly Adepts forming a RIGHT triangle.
+                // Each gets +3 Magic damage. The area inside the triangle
+                // + 1 tile around each Adept reveals hidden units/traps.
+                this._conclaveAreas = [];
+                for (let team of [this.p1Units, this.p2Units]) {
+                    let adepts = team.filter(u => u.type === 'Adept');
+                    if (adepts.length < 3) continue;
+                    for (let i = 0; i < adepts.length; i++) {
+                        for (let j = i + 1; j < adepts.length; j++) {
+                            for (let k = j + 1; k < adepts.length; k++) {
+                                let a = adepts[i], b = adepts[j], c = adepts[k];
+                                let ar = pr(a), ac = pc(a);
+                                let br = pr(b), bc = pc(b);
+                                let cr2 = pr(c), cc2 = pc(c);
+                                if (ar == null || br == null || cr2 == null) continue;
+                                // Collinear check
+                                let cross = (br - ar) * (cc2 - ac) - (bc - ac) * (cr2 - ar);
+                                if (cross === 0) continue;
+                                // Right triangle check: one of the 3 angles must be 90°.
+                                // Dot product of the two edges at each vertex = 0 → right angle.
+                                let dot1 = (br - ar) * (cr2 - ar) + (bc - ac) * (cc2 - ac); // angle at A
+                                let dot2 = (ar - br) * (cr2 - br) + (ac - bc) * (cc2 - bc); // angle at B
+                                let dot3 = (ar - cr2) * (br - cr2) + (ac - cc2) * (bc - cc2); // angle at C
+                                if (dot1 !== 0 && dot2 !== 0 && dot3 !== 0) continue; // no right angle
+                                // Mark all 3 as Dark Conclave
+                                for (let u of [a, b, c]) {
+                                    if (!u._activeSynergies.includes('DarkConclave')) {
+                                        u._activeSynergies.push('DarkConclave');
+                                        u._darkConclave = true;
+                                    }
+                                }
+                                // Compute reveal area: tiles inside the triangle + 1 around each adept
+                                let tiles = new Set();
+                                // Brute-force: check every board tile
+                                for (let r = 0; r < ROWS; r++) {
+                                    for (let c = 0; c < COLS; c++) {
+                                        // Within 1 of any conclave adept?
+                                        let nearAdept = [a,b,c].some(u => Math.max(Math.abs(pr(u)-r), Math.abs(pc(u)-c)) <= 1);
+                                        // Inside the triangle? (barycentric test)
+                                        let d1 = (r - br) * (ac - bc) - (c - bc) * (ar - br);
+                                        let d2 = (r - cr2) * (bc - cc2) - (c - cc2) * (br - cr2);
+                                        let d3 = (r - ar) * (cc2 - ac) - (c - ac) * (cr2 - ar);
+                                        let hasNeg = (d1 < 0) || (d2 < 0) || (d3 < 0);
+                                        let hasPos = (d1 > 0) || (d2 > 0) || (d3 > 0);
+                                        let inside = !(hasNeg && hasPos);
+                                        if (nearAdept || inside) tiles.add(`${r},${c}`);
+                                    }
+                                }
+                                let teamPlayer = team[0].player;
+                                this._conclaveAreas.push({player: teamPlayer, tiles, adepts: [a,b,c]});
+                            }
                         }
                     }
                 }
@@ -1809,64 +1866,25 @@
                     }
                 }
 
-                // --- TRIANGLE SIGHT DETECTION ---
-                // Three friendly Adepts forming a non-collinear triangle gain
-                // "inner sight". Two effects:
-                //  (a) Any stealthed enemy INSIDE the triangle is revealed.
-                //  (b) When any two Adepts in the same triangle target the
-                //      same tile, both shots deal +100% on that tile.
-                let triangles = [];
-                let coTri = new Map();
-                for (let team of [this.p1Units, this.p2Units]) {
-                    let adepts = team.filter(u => u.type === 'Adept');
-                    if (adepts.length < 3) continue;
-                    let posOf = u => ({
-                        r: u.plannedR != null ? u.plannedR : u.r,
-                        c: u.plannedC != null ? u.plannedC : u.c
-                    });
-                    for (let i = 0; i < adepts.length; i++) {
-                        for (let j = i + 1; j < adepts.length; j++) {
-                            for (let k = j + 1; k < adepts.length; k++) {
-                                let a = adepts[i], b = adepts[j], c = adepts[k];
-                                let pa = posOf(a), pb = posOf(b), pc = posOf(c);
-                                let cross = (pb.r - pa.r) * (pc.c - pa.c) - (pb.c - pa.c) * (pc.r - pa.r);
-                                if (cross === 0) continue; // collinear — no triangle
-                                triangles.push({adepts: [a, b, c], pts: [pa, pb, pc], team: a.player});
-                                for (let x of [a, b, c]) {
-                                    if (!coTri.has(x)) coTri.set(x, new Set());
-                                }
-                                coTri.get(a).add(b); coTri.get(a).add(c);
-                                coTri.get(b).add(a); coTri.get(b).add(c);
-                                coTri.get(c).add(a); coTri.get(c).add(b);
-                                for (let x of [a, b, c]) {
-                                    x._activeSynergies = [...(x._activeSynergies || []), 'Triangle Sight'];
-                                }
+                // --- DARK CONCLAVE REVEAL ---
+                // Use the conclave areas computed in computeSynergies to reveal
+                // stealthed enemies and enemy traps inside the conclave zone.
+                if (this._conclaveAreas) {
+                    for (let ca of this._conclaveAreas) {
+                        let enemies = ca.player === 1 ? this.p2Units : this.p1Units;
+                        for (let e of enemies) {
+                            if (!e.stealthed) continue;
+                            let ep = e.plannedR != null ? `${e.plannedR},${e.plannedC}` : `${e.r},${e.c}`;
+                            if (ca.tiles.has(ep)) {
+                                e.stealthed = false;
+                                e._activeSynergies = [...(e._activeSynergies || []), 'Revealed'];
                             }
                         }
-                    }
-                }
-                this._triangleSightCoTri = coTri;
-                // Effect (a): reveal stealthed enemies inside any friendly triangle.
-                let pointInTri = (p, t) => {
-                    let [a, b, cp] = t;
-                    let d1 = (p.r - b.r) * (a.c - b.c) - (a.r - b.r) * (p.c - b.c);
-                    let d2 = (p.r - cp.r) * (b.c - cp.c) - (b.r - cp.r) * (p.c - cp.c);
-                    let d3 = (p.r - a.r) * (cp.c - a.c) - (cp.r - a.r) * (p.c - a.c);
-                    let hasNeg = (d1 < 0) || (d2 < 0) || (d3 < 0);
-                    let hasPos = (d1 > 0) || (d2 > 0) || (d3 > 0);
-                    return !(hasNeg && hasPos);
-                };
-                for (let tri of triangles) {
-                    let enemies = tri.team === 1 ? this.p2Units : this.p1Units;
-                    for (let e of enemies) {
-                        if (!e.stealthed) continue;
-                        let ep = {
-                            r: e.plannedR != null ? e.plannedR : e.r,
-                            c: e.plannedC != null ? e.plannedC : e.c
-                        };
-                        if (pointInTri(ep, tri.pts)) {
-                            e.stealthed = false;
-                            e._activeSynergies = [...(e._activeSynergies || []), 'Revealed'];
+                        for (let trap of this.traps) {
+                            if (trap.player === ca.player) continue;
+                            if (ca.tiles.has(`${trap.r},${trap.c}`)) {
+                                trap._revealed = true;
+                            }
                         }
                     }
                 }
@@ -1952,20 +1970,8 @@
                             }
                         }
 
-                        // Triangle Sight: if this Adept shares a triangle with
-                        // another Adept that's focusing on the same tile as us,
-                        // both shots get +100% on the target tile.
-                        if (u.type === 'Adept' && this._triangleSightCoTri && this._triangleSightCoTri.has(u) && focus
-                            && tgt.plannedR === focus.r && tgt.plannedC === focus.c) {
-                            for (let partner of this._triangleSightCoTri.get(u)) {
-                                if (partner === u || !partner.plannedAtk) continue;
-                                let pf = this.getFocusTile(partner);
-                                if (pf && pf.r === focus.r && pf.c === focus.c) {
-                                    mul *= 2;
-                                    break;
-                                }
-                            }
-                        }
+                        // (Dark Conclave damage boost is handled as a flat +3 in hit(),
+                        // not a multiplier here — prevents stacking with Arcing Firebolt.)
 
                         // Accuracy (Archer): +50% per stack, cap 3 stacks
                         if (u.type === 'Archer' && u.accuracyStack > 0 && !volleyUsed.has(u)) {
@@ -3338,6 +3344,7 @@
                         ArcingFirebolt: {glyph: '✺',  color: '#ff60a0', title: 'Arcing Firebolt', desc: '2+ magic users targeting the same tile — bolts arc to adjacent enemies'},
                         FocusedChan:    {glyph: '◈',  color: '#a080ff', title: 'Focused Channeling', desc: 'Stationary Adept — +1 Magic dmg per turn held still'},
                         Phalanx:        {glyph: '▥',  color: '#cfd8ff', title: 'Phalanx', desc: '3+ Squires in a line — +2 Melee defense, halts enemy charges'},
+                        DarkConclave:   {glyph: '⛧',  color: '#8a40c0', title: 'Dark Conclave', desc: '3 Adepts in a right triangle — +3 Magic dmg, reveals hidden units and traps'},
                     };
                     let shown = [];
                     for (let s of u._activeSynergies) {
@@ -3506,6 +3513,57 @@
                                 }
                             }
                         }
+                    }
+                }
+
+                // Dark Conclave aura: purple glow on tiles inside the triangle + border.
+                // Only visible during the owning player's planning phase so it
+                // doesn't reveal positions to the opponent.
+                if (game._conclaveAreas && (game.phase === 'PLAN_P1' || game.phase === 'PLAN_P2')) {
+                    let planningPlayer = game.phase === 'PLAN_P1' ? 1 : 2;
+                    for (let ca of game._conclaveAreas) {
+                        if (ca.player !== planningPlayer) continue;
+                        let pulse = 0.3 + 0.2 * Math.sin(performance.now() / 600);
+                        // Glow on each tile in the area
+                        for (let key of ca.tiles) {
+                            let [tr, tc] = key.split(',').map(Number);
+                            let [hx, hy] = this.isoCenter(tr, tc);
+                            this.ctx.save();
+                            this.ctx.fillStyle = `rgba(120,50,180,${pulse * 0.2})`;
+                            this.ctx.beginPath();
+                            this.ctx.moveTo(hx, hy - ISO_TH);
+                            this.ctx.lineTo(hx + ISO_TW, hy);
+                            this.ctx.lineTo(hx, hy + ISO_TH);
+                            this.ctx.lineTo(hx - ISO_TW, hy);
+                            this.ctx.closePath();
+                            this.ctx.fill();
+                            this.ctx.restore();
+                        }
+                        // Triangle edges between adepts
+                        let pts = ca.adepts.map(u => {
+                            let r = u.plannedR != null ? u.plannedR : u.r;
+                            let c = u.plannedC != null ? u.plannedC : u.c;
+                            return this.isoCenter(r, c);
+                        });
+                        this.ctx.save();
+                        this.ctx.strokeStyle = `rgba(160,80,220,${pulse * 0.8})`;
+                        this.ctx.lineWidth = 2;
+                        this.ctx.beginPath();
+                        this.ctx.moveTo(pts[0][0], pts[0][1]);
+                        this.ctx.lineTo(pts[1][0], pts[1][1]);
+                        this.ctx.lineTo(pts[2][0], pts[2][1]);
+                        this.ctx.closePath();
+                        this.ctx.stroke();
+                        this.ctx.restore();
+                    }
+                }
+
+                // Show revealed traps (from Dark Conclave) — only during planning
+                let showRevealed = game.phase === 'PLAN_P1' || game.phase === 'PLAN_P2';
+                let revealPlayer = game.phase === 'PLAN_P1' ? 1 : 2;
+                for (let trap of game.traps) {
+                    if (trap._revealed && showRevealed && trap.player !== revealPlayer) {
+                        this.drawTrap(trap.r, trap.c, false);
                     }
                 }
 
@@ -5376,7 +5434,7 @@
                         scene: 'Phalanx'
                     },
                     {
-                        name: 'Triangle Sight', glyph: '△', badgeColor: '#b8e0ff',
+                        name: 'DarkConclave', glyph: '△', badgeColor: '#b8e0ff',
                         who: 'Three friendly Adepts (triangle)',
                         trigger: 'Three of your Adepts form a triangle (none of the three are in a straight line together). Triangle can be any size.',
                         effectShort: 'Reveal inside + ×2 when any two Adepts coordinate',
@@ -7267,7 +7325,10 @@
                               rule: 'If another Adept (or Mage / Archmage) targets the same tile, the bolts arc together — center target takes 2.5× damage, and 3 of 8 surrounding tiles get a half-damage splash.' },
                             { name: 'Focused Channeling ◈ (amplifier)',
                               dmg:  '+1 flat Magic per stack (max 5)',
-                              rule: 'Each turn the Adept holds position (doesn\'t move), Magic damage gains +1 flat stacking bonus. Resets the moment they move.' }
+                              rule: 'Each turn the Adept holds position (doesn\'t move), Magic damage gains +1 flat stacking bonus. Resets the moment they move.' },
+                            { name: 'Dark Conclave ⛧ (amplifier)',
+                              dmg:  '+3 Magic damage',
+                              rule: '3 Adepts in a right triangle formation. Each gets +3 Magic damage. The area inside the triangle + 1 tile around each Adept reveals stealthed enemies and hidden traps. Be careful — firebolts hit the first thing in their path, including your own conclave members!' }
                         ]
                     },
                     Mage: {
@@ -8560,6 +8621,7 @@
                             {glyph:'✺', name:'Arcing Firebolt', unit:'2+ Magic', desc:'Same target → 2.5× center + 3 splash'},
                             {glyph:'◈', name:'Focused Chan.', unit:'Adept', desc:'+1 Magic/turn while stationary'},
                             {glyph:'▥', name:'Phalanx', unit:'3+ Squires', desc:'+2 Melee def in a row/column, halts charges'},
+                            {glyph:'⛧', name:'Dark Conclave', unit:'3 Adepts', desc:'Right triangle: +3 Magic dmg, reveals stealth + traps'},
                         ];
                         let panW = 380, rowH = 17;
                         let panH = 24 + amps.length * rowH + 8;
