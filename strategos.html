@@ -43,6 +43,15 @@
     <div id="container">
         <h1>Strategos</h1>
         <canvas id="gameCanvas" width="720" height="1080"></canvas>
+        <!-- Hidden input used only to surface the native keyboard on mobile
+             when the user taps the on-canvas name entry box. It is kept in
+             the viewport (required by iOS) but visually invisible. -->
+        <input id="nameInputHidden" type="text" maxlength="16"
+               autocomplete="off" autocapitalize="words" spellcheck="false"
+               aria-label="Player name"
+               style="position:fixed; top:0; left:0; width:1px; height:1px;
+                      opacity:0; border:none; outline:none; background:transparent;
+                      padding:0; margin:0; font-size:16px; z-index:-1;">
         <div id="info">Click buttons to play | ESC = deselect</div>
         <div id="combatLog" style="display:none; max-width:720px; width:100%; margin:10px auto 0; background:#222; border:2px solid #444; border-radius:6px; padding:10px 14px; text-align:left; max-height:260px; overflow-y:auto; font-family:'Courier New',monospace; font-size:13px; color:#ccc; line-height:1.5;"></div>
     </div>
@@ -4847,17 +4856,24 @@
                 this.ctx.strokeStyle = '#6080c0';
                 this.ctx.lineWidth = 2;
                 this.ctx.strokeRect(boxX, boxY, boxW, boxH);
-                // Typed text with blinking cursor
+                // Register the box itself as a clickable region so taps
+                // focus the hidden <input> and summon the mobile keyboard.
+                game.clickBounds['name_input_box'] = [boxX, boxY, boxW, boxH];
+                // Typed text with blinking cursor, or a placeholder prompt.
                 let typed = game.nameInput || '';
                 let cursor = Math.floor(performance.now() / 500) % 2 === 0 ? '|' : '';
-                this.ctx.fillStyle = UI_TEXT_WHITE;
                 this.ctx.font = 'bold 22px Arial';
                 this.ctx.textAlign = 'center';
-                this.ctx.fillText(typed + cursor, cx, boxY + 32);
-                // Buttons
-                let canConfirm = typed.trim().length > 0;
+                if (typed.length === 0) {
+                    this.ctx.fillStyle = '#6a6a7a';
+                    this.ctx.fillText('Tap to type…', cx, boxY + 32);
+                } else {
+                    this.ctx.fillStyle = UI_TEXT_WHITE;
+                    this.ctx.fillText(typed + cursor, cx, boxY + 32);
+                }
+                // Buttons — confirm is always enabled; empty name defaults to "Player".
                 this.drawButton(game, 'name_confirm', cx - 120, UI_TOP + 170, 240, 44,
-                    'Start Game →', {color: canConfirm ? '#46a046' : '#2a2a2a', enabled: canConfirm, font: 'bold 16px Arial'});
+                    'Start Game →', {color: '#46a046', font: 'bold 16px Arial'});
                 this.drawButton(game, 'name_back', cx - 80, UI_TOP + 230, 160, 36,
                     '← Back', {color: '#555', font: 'bold 14px Arial'});
             }
@@ -8896,7 +8912,21 @@
                 return true;
             }
             // ---- NAME ENTRY ----
+            // Tap on the text box → focus the hidden <input> so mobile
+            // browsers raise the native keyboard. focus() must run inside
+            // the same user-gesture tick as the tap for iOS to comply.
+            if (key === 'name_input_box') {
+                let el = document.getElementById('nameInputHidden');
+                if (el) {
+                    el.value = game.nameInput || '';
+                    el.focus();
+                    try { el.setSelectionRange(el.value.length, el.value.length); } catch (_) {}
+                }
+                return true;
+            }
             if (key === 'name_confirm') {
+                let el = document.getElementById('nameInputHidden');
+                if (el) el.blur();
                 game.playerName = (game.nameInput || 'Player').trim().slice(0, 16) || 'Player';
                 if (game.gameMode === 'Campaign') {
                     game.budget = 3;
@@ -8909,6 +8939,8 @@
                 return true;
             }
             if (key === 'name_back') {
+                let el = document.getElementById('nameInputHidden');
+                if (el) el.blur();
                 game.phase = 'MENU';
                 return true;
             }
@@ -10140,6 +10172,27 @@
             // client runs independently until the REMOTE_WAIT sync point.)
         });
 
+        // Mobile keyboard bridge: the hidden <input> receives native key
+        // events (including IME/autocomplete) and mirrors them into
+        // game.nameInput. Desktop users can keep using the document-level
+        // keydown handler below — both stay in sync.
+        (function wireHiddenNameInput() {
+            let el = document.getElementById('nameInputHidden');
+            if (!el) return;
+            el.addEventListener('input', () => {
+                if (game.phase !== 'NAME_ENTRY') return;
+                game.nameInput = (el.value || '').slice(0, 16);
+            });
+            el.addEventListener('keydown', (e) => {
+                if (game.phase !== 'NAME_ENTRY') return;
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    el.blur();
+                    handleButtonClick(game, 'name_confirm');
+                }
+            });
+        })();
+
         document.addEventListener('keydown', (e) => {
             // Dismiss damage pause on any key
             if (game.phase === 'ACTION_RESOLVE' && game.animation && game.animation.paused) {
@@ -10149,13 +10202,15 @@
             }
             // Name entry typing
             if (game.phase === 'NAME_ENTRY') {
+                // If the hidden <input> has focus, let it handle keys
+                // natively (so mobile IME / selection / paste all work).
+                let hidden = document.getElementById('nameInputHidden');
+                if (hidden && document.activeElement === hidden) return;
                 if (e.key === 'Backspace') {
                     game.nameInput = (game.nameInput || '').slice(0, -1);
                     e.preventDefault(); return;
                 } else if (e.key === 'Enter') {
-                    if ((game.nameInput || '').trim().length > 0) {
-                        handleButtonClick(game, 'name_confirm');
-                    }
+                    handleButtonClick(game, 'name_confirm');
                     e.preventDefault(); return;
                 } else if (e.key === 'Escape') {
                     game.phase = 'MENU';
