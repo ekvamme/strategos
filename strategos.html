@@ -491,6 +491,12 @@
                 this.animation = null; // movement/attack animation state during ACTION_RESOLVE
                 this.traps = []; // [{player, r, c, ownerId}] - placed by Rogues, persist on board
                 this.beacons = []; // [{player, ownerId, r, c}] — Adept Beacon Mark; persists while owner alive
+                // Match log (see resolveAction / drawGameOver). Also reset
+                // inside initBoard() so campaign match-to-match transitions
+                // start fresh.
+                this.matchLog = [];
+                this.matchLogStarted = false;
+                this._turnLogSnap = null;
                 // Tutorial: step 0 = overview, steps 1-9 = unit spotlights
                 this.tutorialStep = 0;
                 // ----- REMOTE PVP STATE -----
@@ -541,6 +547,119 @@
                 this.animation = null;
                 this.traps = [];
                 this.beacons = [];
+                // Full-match text log for post-game review. Populated by
+                // captureTurnStart/logTurn/logMatchResult and copied to the
+                // clipboard from the Game Over screen.
+                this.matchLog = [];
+                this.matchLogStarted = false;
+                this._turnLogSnap = null;
+            }
+
+            // --- MATCH LOG -----------------------------------------------
+            // Design: simple array of plain-text blocks; `getMatchLogText()`
+            // joins them for clipboard export. One block per turn, plus a
+            // header block and a final-result block.
+
+            logMatchHeader() {
+                this.matchLogStarted = true;
+                let lines = [];
+                lines.push('=== STRATEGOS MATCH LOG ===');
+                let modeLine = `Mode: ${this.gameMode || '?'}`;
+                if (this.gameMode === 'AI' || this.gameMode === 'Campaign') modeLine += ` (${this.difficulty})`;
+                lines.push(modeLine);
+                if (this.playerName) lines.push(`Player: ${this.playerName}`);
+                lines.push(`Budget: ${this.budget}`);
+                lines.push(`Started: ${new Date().toLocaleString()}`);
+                lines.push('');
+                lines.push('Initial rosters:');
+                lines.push('  P1: ' + (this.p1Units.map(u => `${u.type}@(${u.r},${u.c})`).join(', ') || '(none)'));
+                lines.push('  P2: ' + (this.p2Units.map(u => `${u.type}@(${u.r},${u.c})`).join(', ') || '(none)'));
+                this.matchLog.push(lines.join('\n'));
+            }
+
+            // Captured at the TOP of resolveAction, before any mutation.
+            // Holds pre-turn position + plan for each unit so the log block
+            // can show "what was planned" separately from "what happened".
+            captureTurnStart() {
+                let snap = (u) => ({
+                    player: u.player, type: u.type, r: u.r, c: u.c, hp: u.hp,
+                    plannedR: u.plannedR, plannedC: u.plannedC,
+                    plannedAtk: u.plannedAtk ? {...u.plannedAtk} : null,
+                    plannedTrap: u.plannedTrap ? {...u.plannedTrap} : null,
+                    plannedBeacon: u.plannedBeacon ? {...u.plannedBeacon} : null,
+                    plannedAid: u.plannedAid ? {...u.plannedAid} : null,
+                    plannedShadow: u.plannedShadow ? {...u.plannedShadow} : null,
+                    plannedRain: u.plannedRain ? {...u.plannedRain} : null,
+                    plannedBlink: u.plannedBlink ? {...u.plannedBlink} : null,
+                    plannedStealth: !!u.plannedStealth,
+                    plannedChannel: !!u.plannedChannel
+                });
+                this._turnLogSnap = {
+                    p1: this.p1Units.map(snap),
+                    p2: this.p2Units.map(snap)
+                };
+            }
+
+            logTurn() {
+                let pre = this._turnLogSnap;
+                if (!pre) return;
+                let lines = [];
+                lines.push('');
+                lines.push(`--- Turn ${this.turn} ---`);
+                lines.push('Plans:');
+                let describePlan = (u, side) => {
+                    let parts = [`  P${side} ${u.type}@(${u.r},${u.c}) hp=${u.hp}`];
+                    if (u.plannedR != null && (u.plannedR !== u.r || u.plannedC !== u.c)) {
+                        parts.push(`move→(${u.plannedR},${u.plannedC})`);
+                    }
+                    if (u.plannedAtk) {
+                        let a = u.plannedAtk;
+                        if (a.targetR != null) parts.push(`fire→(${a.targetR},${a.targetC})`);
+                        else if (a.r != null && a.c != null) parts.push(`atk→(${a.r},${a.c})`);
+                        else if (a.direction) parts.push(`atk-dir[${a.direction[0]},${a.direction[1]}]`);
+                    }
+                    if (u.plannedTrap)   parts.push(`trap→(${u.plannedTrap.r},${u.plannedTrap.c})`);
+                    if (u.plannedBeacon) parts.push(`beacon→(${u.plannedBeacon.r},${u.plannedBeacon.c})`);
+                    if (u.plannedAid)    parts.push(`aid→(${u.plannedAid.r},${u.plannedAid.c})`);
+                    if (u.plannedShadow) parts.push(`shadow→(${u.plannedShadow.r},${u.plannedShadow.c})`);
+                    if (u.plannedRain)   parts.push(`rain→(${u.plannedRain.r},${u.plannedRain.c})`);
+                    if (u.plannedBlink)  parts.push(`blink→(${u.plannedBlink.r},${u.plannedBlink.c})`);
+                    if (u.plannedStealth) parts.push('stealth');
+                    if (u.plannedChannel) parts.push('channel');
+                    return parts.join(' ');
+                };
+                for (let u of pre.p1) lines.push(describePlan(u, 1));
+                for (let u of pre.p2) lines.push(describePlan(u, 2));
+                lines.push('');
+                if (this.combatLog && this.combatLog.length > 0) {
+                    lines.push('Combat:');
+                    for (let l of this.combatLog) lines.push('  ' + l);
+                } else {
+                    lines.push('Combat: (no damage this turn)');
+                }
+                lines.push('');
+                lines.push('Survivors:');
+                let fmt = (u) => `${u.type}@(${u.r},${u.c}) ${u.hp}/${u.maxHp}`;
+                lines.push('  P1: ' + (this.p1Units.length ? this.p1Units.map(fmt).join(', ') : '— wiped —'));
+                lines.push('  P2: ' + (this.p2Units.length ? this.p2Units.map(fmt).join(', ') : '— wiped —'));
+                this.matchLog.push(lines.join('\n'));
+                this._turnLogSnap = null;
+            }
+
+            logMatchResult() {
+                let winner = this.p1Units.length > 0
+                    ? (this.p2Units.length > 0 ? 'DRAW' : 'P1 WINS')
+                    : (this.p2Units.length > 0 ? 'P2 WINS' : 'DRAW (mutual wipe)');
+                let lines = [];
+                lines.push('');
+                lines.push('=== FINAL ===');
+                lines.push(`Result: ${winner}`);
+                lines.push(`Total turns: ${this.turn}`);
+                this.matchLog.push(lines.join('\n'));
+            }
+
+            getMatchLogText() {
+                return (this.matchLog || []).join('\n');
             }
 
             getUnitAt(r, c) {
@@ -1065,6 +1184,12 @@
             }
 
             resolveAction() {
+                // Match-log: write the header exactly once per match (first
+                // resolveAction call), and snapshot pre-turn state so the
+                // log block can show "what was planned" next to the result.
+                if (!this.matchLogStarted) this.logMatchHeader();
+                this.captureTurnStart();
+
                 // --- COLLISION / WEIGHT SYSTEM ---
                 let allUnits = [...this.p1Units, ...this.p2Units];
                 // Save original positions
@@ -2211,6 +2336,10 @@
                     }
                 }
 
+                // Append this turn's block to the match log AFTER all state
+                // updates so survivors[] reflects the post-resolution board.
+                this.logTurn();
+
                 this.buildAnimationFromResolution(allUnits, origPos, animAttacks);
             }
 
@@ -2377,6 +2506,7 @@
                     idx = 0;
                 } else if (this.phase === 'ACTION_RESOLVE') {
                     if (this.getGameOver()) {
+                        this.logMatchResult();
                         this.recordCampaignResult();
                         // Calculate and save score for AI/Campaign wins
                         let score = this.calculateScore();
@@ -2572,6 +2702,7 @@
                 if (this.phase === 'ACTION_RESOLVE') {
                     // Animation just finished. Game-over check first.
                     if (this.getGameOver()) {
+                        this.logMatchResult();
                         this.phase = 'GAME_OVER';
                         return;
                     }
@@ -8310,6 +8441,15 @@
                 } else {
                     this.drawButton(game, 'new_game', cx - 160, yOff, 320, 44, 'New Game →', {color: '#46a046', font: 'bold 16px Arial'});
                 }
+                // Copy Match Log button — one row below the primary action.
+                // Lets the player paste the full match history into a chat
+                // with screenshots for postmortem review.
+                let copyY = yOff + 54;
+                let copyLabel = game._matchLogCopiedAt && (performance.now() - game._matchLogCopiedAt) < 1800
+                    ? '✓ Copied!'
+                    : '📋 Copy Match Log';
+                this.drawButton(game, 'copy_match_log', cx - 160, copyY, 320, 34,
+                    copyLabel, {color: game._matchLogCopiedAt ? '#3a6a3a' : '#4a5a7a', font: 'bold 13px Arial'});
             }
 
             drawIsoDiamond(r, c, color) {
@@ -9321,6 +9461,34 @@
             // ---- GAME_OVER ----
             if (key === 'new_game') {
                 window.__resetGame = true;
+                return true;
+            }
+            if (key === 'copy_match_log') {
+                // Copy the full match text to clipboard. Fall back to a
+                // hidden <textarea> + execCommand path for older browsers.
+                let text = game.getMatchLogText ? game.getMatchLogText() : '';
+                if (!text) text = '(match log is empty)';
+                let markCopied = () => { game._matchLogCopiedAt = performance.now(); };
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(text).then(markCopied).catch(() => {
+                        // Fallback path on HTTP / older mobile browsers.
+                        let ta = document.createElement('textarea');
+                        ta.value = text;
+                        ta.style.position = 'fixed'; ta.style.opacity = '0';
+                        document.body.appendChild(ta);
+                        ta.focus(); ta.select();
+                        try { document.execCommand('copy'); markCopied(); } catch (e) {}
+                        document.body.removeChild(ta);
+                    });
+                } else {
+                    let ta = document.createElement('textarea');
+                    ta.value = text;
+                    ta.style.position = 'fixed'; ta.style.opacity = '0';
+                    document.body.appendChild(ta);
+                    ta.focus(); ta.select();
+                    try { document.execCommand('copy'); markCopied(); } catch (e) {}
+                    document.body.removeChild(ta);
+                }
                 return true;
             }
             if (key === 'next_match') {
