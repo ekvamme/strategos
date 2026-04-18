@@ -1949,14 +1949,7 @@
                     }
                 }
 
-                // Simultaneous-damage invariant: every unit that had a planned
-                // attack at the start of this turn gets to fire it, EVEN if it
-                // was killed earlier this tick (by trample / trap / readied
-                // shot / squeeze). Iterating `allUnits` (snapshot taken before
-                // any cullDeadUnits() calls) keeps dead shooters in the loop;
-                // explicit cancellations (phalanx halt, charger-stunned-on-
-                // trap) already null plannedAtk and are skipped below.
-                for (let u of allUnits) {
+                for (let u of [...this.p1Units, ...this.p2Units]) {
                     if (!u.plannedAtk) continue;
                     // Volley: handled separately below; skip normal attack for
                     // paired Volley units.
@@ -2115,10 +2108,9 @@
                 // and the tile one step further in the same firing direction
                 // takes HALF damage. Trailing tile is lost if it's off-board.
                 for (let {a, b, dr, dc, dist} of volleyPairs) {
-                    // Simultaneous-damage invariant: a paired volley fires
-                    // even if one/both archers died earlier this tick. The
-                    // arrows were loosed before the fatal blow connected.
+                    if (a.hp <= 0 && b.hp <= 0) continue;
                     for (let shooter of [a, b]) {
+                        if (shooter.hp <= 0) continue;
                         let mainR = shooter.plannedR + dr * dist;
                         let mainC = shooter.plannedC + dc * dist;
                         if (mainR >= 0 && mainR < ROWS && mainC >= 0 && mainC < COLS) {
