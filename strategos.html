@@ -2773,11 +2773,12 @@
                         u.plannedStealth = false; u.plannedShadow = null;
                         u.plannedChannel = false; u.plannedRain = null;
                         u.plannedBlink = null;
-                        // Dug-in Squires are committed to their stance — lock
-                        // them in place, no attack, auto-ordered.
+                        // Dug-in Squires are committed to position — lock their
+                        // planned tile to current, but DON'T auto-order. They
+                        // can still attack an adjacent enemy this turn; player
+                        // must select them and pick a target (or Skip Attack).
                         if (u.dugInTurns > 0) {
                             u.plannedR = u.r; u.plannedC = u.c;
-                            u.ordered = true;
                         }
                     }
                     // In AI mode, skip straight to P2 AI planning then resolve
@@ -2837,11 +2838,12 @@
                         u.plannedStealth = false; u.plannedShadow = null;
                         u.plannedChannel = false; u.plannedRain = null;
                         u.plannedBlink = null;
-                        // Dug-in Squires are committed to their stance — lock
-                        // them in place, no attack, auto-ordered.
+                        // Dug-in Squires are committed to position — lock their
+                        // planned tile to current, but DON'T auto-order. They
+                        // can still attack an adjacent enemy this turn; player
+                        // must select them and pick a target (or Skip Attack).
                         if (u.dugInTurns > 0) {
                             u.plannedR = u.r; u.plannedC = u.c;
-                            u.ordered = true;
                         }
                     }
                 } else if (this.phase === 'PLAN_P2') {
@@ -5694,21 +5696,21 @@
                 let y = 162;
                 for (let s of sections) {
                     this.ctx.fillStyle = '#9ac4ff';
-                    this.ctx.font = 'bold 17px Arial';
+                    this.ctx.font = 'bold 19px Arial';
                     this.ctx.textAlign = 'left';
                     this.ctx.fillText(s.title, 40, y);
-                    y += 24;
+                    y += 28;
                     this.ctx.fillStyle = '#dddddd';
-                    this.ctx.font = '14px Arial';
+                    this.ctx.font = '16px Arial';
                     for (let line of s.body) {
                         this.ctx.fillText(line, 54, y);
-                        y += 19;
+                        y += 22;
                     }
                     y += 14;
                 }
 
                 this.ctx.fillStyle = UI_TEXT_MUTED;
-                this.ctx.font = 'italic 13px Arial';
+                this.ctx.font = 'italic 15px Arial';
                 this.ctx.textAlign = 'center';
                 this.ctx.fillText('Next: contested spaces, then a tour of all nine units.', cx, CANVAS_H - 110);
             }
@@ -5727,7 +5729,7 @@
                 this.ctx.textAlign = 'center';
                 this.ctx.fillText('Contested Spaces', cx, 118);
                 this.ctx.fillStyle = '#9ac4ff';
-                this.ctx.font = '13px Arial';
+                this.ctx.font = '15px Arial';
                 this.ctx.fillText('When two units move into the same tile, here\'s who stays.', cx, 138);
 
                 // Three scenarios cycle every 4.5s. Labels, which unit is A/B,
@@ -5925,46 +5927,46 @@
 
                 // Scenario explanation, beneath the panel
                 this.ctx.fillStyle = UI_TEXT;
-                this.ctx.font = '14px Arial';
+                this.ctx.font = '16px Arial';
                 this.ctx.textAlign = 'center';
-                let explY = panelY + panelH + 24;
+                let explY = panelY + panelH + 26;
                 let lines = this.wrapTutorialText(sc.subline, panelW - 40);
                 for (let line of lines) {
                     this.ctx.fillText(line, cx, explY);
-                    explY += 20;
+                    explY += 22;
                 }
 
                 // Priority rule summary (stays on screen across all 3 demos)
-                let ruleY = CANVAS_H - 210;
+                let ruleY = CANVAS_H - 220;
                 this.ctx.fillStyle = '#2a2a35';
-                this.ctx.fillRect(panelX, ruleY, panelW, 78);
+                this.ctx.fillRect(panelX, ruleY, panelW, 92);
                 this.ctx.strokeStyle = '#4a5060';
                 this.ctx.lineWidth = 1;
-                this.ctx.strokeRect(panelX, ruleY, panelW, 78);
+                this.ctx.strokeRect(panelX, ruleY, panelW, 92);
                 this.ctx.fillStyle = '#9ac4ff';
-                this.ctx.font = 'bold 13px Arial';
+                this.ctx.font = 'bold 15px Arial';
                 this.ctx.textAlign = 'left';
-                this.ctx.fillText('⚖  TIEBREAK ORDER', panelX + 14, ruleY + 20);
+                this.ctx.fillText('⚖  TIEBREAK ORDER', panelX + 14, ruleY + 22);
                 this.ctx.fillStyle = UI_TEXT;
-                this.ctx.font = 'bold 14px Arial';
+                this.ctx.font = 'bold 16px Arial';
                 let keywords = [
                     { word: 'MOMENTUM', color: '#f6d87a', note: 'charging unit wins (2-tile move in a straight line)' },
                     { word: 'WEIGHT',   color: '#9ae0ff', note: 'heavier class wins (Heavy 3 > Medium 2 > Light 1)' },
                     { word: 'LIFE',     color: '#8be28b', note: 'higher HP wins the tile; loser bounces back to origin' }
                 ];
                 let kX = panelX + 14;
-                let kY = ruleY + 42;
+                let kY = ruleY + 46;
                 for (let i = 0; i < keywords.length; i++) {
                     let k = keywords[i];
                     this.ctx.fillStyle = k.color;
-                    this.ctx.font = 'bold 14px Arial';
+                    this.ctx.font = 'bold 16px Arial';
                     let wlabel = (i + 1) + '. ' + k.word;
                     this.ctx.fillText(wlabel, kX, kY);
                     let wsz = this.ctx.measureText(wlabel).width;
                     this.ctx.fillStyle = '#c4c0b8';
-                    this.ctx.font = '13px Arial';
+                    this.ctx.font = '15px Arial';
                     this.ctx.fillText('  —  ' + k.note, kX + wsz, kY);
-                    kY += 18;
+                    kY += 21;
                 }
             }
 
@@ -5992,9 +5994,9 @@
                 this.ctx.fillText('Amplifiers', cx, 118);
 
                 this.ctx.fillStyle = '#9ac4ff';
-                this.ctx.font = '13px Arial';
+                this.ctx.font = '15px Arial';
                 this.ctx.fillText('Position, pair, and time your units right — amplifiers trigger automatically and boost your army. Cycle through to see how each works.',
-                    cx, 140);
+                    cx, 142);
 
                 // ---- Selector bar: Prev / (badge + name + counter) / Next
                 let selY = 158, selH = 38;
@@ -6060,43 +6062,43 @@
                 this.ctx.strokeStyle = '#3a4050';
                 this.ctx.strokeRect(infoX, bodyY, infoW, bodyH);
 
-                let iy = bodyY + 28;
+                let iy = bodyY + 30;
                 // Header line — "UNITS INVOLVED"
                 this.ctx.fillStyle = '#9ac4ff';
-                this.ctx.font = 'bold 12px Arial';
+                this.ctx.font = 'bold 14px Arial';
                 this.ctx.textAlign = 'left';
-                this.ctx.fillText('UNITS INVOLVED', infoX + 16, iy); iy += 20;
+                this.ctx.fillText('UNITS INVOLVED', infoX + 16, iy); iy += 24;
                 this.ctx.fillStyle = UI_TEXT;
-                this.ctx.font = '14px Arial';
+                this.ctx.font = '16px Arial';
                 let whoLines = this.wrapTutorialText(amp.who, infoW - 32);
-                for (let l of whoLines) { this.ctx.fillText(l, infoX + 16, iy); iy += 18; }
-                iy += 12;
+                for (let l of whoLines) { this.ctx.fillText(l, infoX + 16, iy); iy += 21; }
+                iy += 14;
 
                 // "TRIGGER"
                 this.ctx.fillStyle = '#9ac4ff';
-                this.ctx.font = 'bold 12px Arial';
-                this.ctx.fillText('TRIGGER', infoX + 16, iy); iy += 20;
+                this.ctx.font = 'bold 14px Arial';
+                this.ctx.fillText('TRIGGER', infoX + 16, iy); iy += 24;
                 this.ctx.fillStyle = UI_TEXT;
-                this.ctx.font = '14px Arial';
+                this.ctx.font = '16px Arial';
                 let trigLines = this.wrapTutorialText(amp.trigger, infoW - 32);
-                for (let l of trigLines) { this.ctx.fillText(l, infoX + 16, iy); iy += 18; }
-                iy += 12;
+                for (let l of trigLines) { this.ctx.fillText(l, infoX + 16, iy); iy += 21; }
+                iy += 14;
 
                 // "EFFECT"
                 this.ctx.fillStyle = '#9ac4ff';
-                this.ctx.font = 'bold 12px Arial';
-                this.ctx.fillText('EFFECT', infoX + 16, iy); iy += 20;
+                this.ctx.font = 'bold 14px Arial';
+                this.ctx.fillText('EFFECT', infoX + 16, iy); iy += 24;
                 this.ctx.fillStyle = '#ffb070';
-                this.ctx.font = 'bold 16px Arial';
-                this.ctx.fillText(amp.effectShort, infoX + 16, iy); iy += 22;
+                this.ctx.font = 'bold 18px Arial';
+                this.ctx.fillText(amp.effectShort, infoX + 16, iy); iy += 26;
                 this.ctx.fillStyle = UI_TEXT;
-                this.ctx.font = '13px Arial';
+                this.ctx.font = '15px Arial';
                 let effLines = this.wrapTutorialText(amp.effectLong, infoW - 32);
-                for (let l of effLines) { this.ctx.fillText(l, infoX + 16, iy); iy += 17; }
+                for (let l of effLines) { this.ctx.fillText(l, infoX + 16, iy); iy += 20; }
 
                 // Hint footer
                 this.ctx.fillStyle = UI_TEXT_MUTED;
-                this.ctx.font = 'italic 12px Arial';
+                this.ctx.font = 'italic 14px Arial';
                 this.ctx.textAlign = 'center';
                 this.ctx.fillText('Amplifier badges appear above your units in-game when their trigger conditions are met.',
                     cx, CANVAS_H - 108);
@@ -6984,11 +6986,13 @@
                 this.ctx.fillText(`Tier ${tier}  •  ${arch}`, CANVAS_W / 2, 138);
 
                 // Left: animated demo
-                this.drawTutorialDemo(type, 20, 155, 380, 340);
-                // Right: stats panel
-                this.drawTutorialStats(type, 410, 155, 285, 500);
-                // Bottom: ability notes & flavor (extra tall — Paladin has 4 skills)
-                this.drawTutorialNotes(type, 20, 665, CANVAS_W - 40, 400);
+                this.drawTutorialDemo(type, 20, 150, 380, 300);
+                // Right: stats panel (compact — content rarely needs 500 px)
+                this.drawTutorialStats(type, 410, 150, 285, 300);
+                // Bottom: ability notes & flavor. Pushed up to y=465 and
+                // grown to 600 px tall so Archer's 9 abilities all render
+                // at a readable size with breathing room between entries.
+                this.drawTutorialNotes(type, 20, 465, CANVAS_W - 40, 600);
             }
 
             // Animated grid demo: cursor picks the unit, moves it, attacks.
@@ -7978,6 +7982,9 @@
                             { name: 'Block',
                               dmg:  '—',
                               rule: 'Heavy weight (3) — enemies cannot pass through.' },
+                            { name: '🛡 Dig In (preparation)',
+                              dmg:  '+2 Me defense, bump-immune for 2 turns',
+                              rule: 'Commit to holding this tile. No attack on the setup turn, but +2 Melee defense applies immediately and chargers bounce off you. Next turn you can still strike an adjacent enemy without breaking stance — you just can\'t move. Button only appears if you stayed put.' },
                             { name: 'Last Stand ✚ (amplifier)',
                               dmg:  '+3 Melee defense + 1 cleave',
                               rule: 'When no friendlies are within 1 tile, this Squire digs in: +3 Me defense and a bonus cleave (1 adjacent enemy hit for half).' },
@@ -8028,28 +8035,31 @@
                         abilities: [
                             { name: 'Aimed Shot',
                               dmg:  '6 Piercing',
-                              rule: 'Pick a tile within Chebyshev 2 of your planned position. At resolve, the arrow strikes whoever ends up on that tile — or nothing.' },
+                              rule: 'Pick any tile within Chebyshev 2 — arrow strikes whoever ends up there.' },
+                            { name: '🎯 Aim (preparation)',
+                              dmg:  '×2.5 damage on next shot',
+                              rule: 'Spend a turn locking in. Next shot is ×2.5 (one-shot bonus). Hold by staying put; moving breaks aim.' },
                             { name: 'Readied Shot (passive)',
-                              dmg:  '3 Piercing (half damage)',
-                              rule: 'When an armored enemy (Squire, Knight, or Paladin) ends up adjacent after movement, this Archer automatically fires a half-damage reaction shot. Triggers once per turn.' },
+                              dmg:  '3 Piercing (half)',
+                              rule: 'Auto-fires a half-damage arrow at any armored enemy (weight 3) ending up adjacent.' },
                             { name: 'High Ground ⇑ (amplifier)',
                               dmg:  '+1 range',
-                              rule: 'Back-row archers gain +1 range (3 instead of 2).' },
+                              rule: 'Back-row archer → range 3 instead of 2.' },
                             { name: 'Volley ⇶ (amplifier)',
                               dmg:  'Line sweep',
-                              rule: 'Two orthogonally-adjacent Archers both aiming along their shared line fire a full sweep: every enemy tile along the line from each archer is hit.' },
+                              rule: 'Two adjacent archers aiming the same direction sweep the whole line through.' },
                             { name: 'Accuracy ◎ (amplifier)',
                               dmg:  '+50% per stack (max 3)',
-                              rule: 'Don\'t move AND target the same tile as last turn to stack Accuracy. Max +150% damage at 3 stacks; resets if you move or retarget.' },
+                              rule: 'Stays still + same target as last turn to stack; resets on move or retarget.' },
                             { name: 'Steady Aim ✦ (amplifier)',
                               dmg:  '+2 flat Piercing',
-                              rule: 'When a friendly Squire stands directly in front of this Archer, the arrow gets +2 damage.' },
+                              rule: 'Ally Squire directly in front → +2 damage.' },
                             { name: 'Anvil & Hammer ⚒ (amplifier)',
                               dmg:  '+2 flat damage',
-                              rule: 'Aim at a tile within 1 square of a friendly Squire — the pinned target takes +2 damage.' },
+                              rule: 'Target within 1 tile of an ally Squire → +2 damage.' },
                             { name: 'Flame Arrow 🔥 (amplifier)',
                               dmg:  '+½ Adept magic damage',
-                              rule: 'If a friendly Adept is targeting the same tile as this Archer, the arrow ignites — adding half of the Adept\'s Magic damage on top.' }
+                              rule: 'Ally Adept targeting the same tile → arrow adds ½ Adept magic damage.' }
                         ]
                     },
                     Rogue: {
@@ -8100,6 +8110,9 @@
                             { name: 'Targeted Firebolt',
                               dmg:  '10 Magic',
                               rule: 'Pick a tile within Chebyshev 3. Fireball strikes whoever ends up on that tile. No pass-through — the Mage\'s precision trades AOE for accuracy.' },
+                            { name: '🔥 Scorch Earth (preparation)',
+                              dmg:  '8 Magic per entry; 8 unmitigated on charge-through',
+                              rule: 'Spend a turn channeling (rotating crosshair aura) to prepare up to 2 fire tiles within Chebyshev 3. Fires ignite at the end of the turn and burn for the next 2 rounds — opponents see them during their planning turn and must route around. Any unit ending on a fire tile takes 8 Magic (minus Ma defense); chargers whose mid-tile crosses fire take full 8 unmitigated. The Mage is immune to their own fire; allies are NOT. Button only appears if you stayed put.' },
                             { name: 'Arcing Firebolt ✺ (amplifier)',
                               dmg:  'Center ×2.5 + 3 splash hits',
                               rule: 'Can share a target tile with an Adept, another Mage, or an Archmage — center takes 2.5× damage, and 3 of 8 surrounding tiles get a half-damage splash.' }
@@ -8124,37 +8137,41 @@
 
                 // Flavor line with some top padding from the box edge
                 this.ctx.fillStyle = '#f6d87a';
-                this.ctx.font = 'italic 15px Arial';
+                this.ctx.font = 'italic 18px Arial';
                 this.ctx.textAlign = 'left';
-                this.ctx.fillText(n.flavor, boxX + 18, boxY + 30);
+                this.ctx.fillText(n.flavor, boxX + 18, boxY + 34);
 
                 // Abilities heading + subtle underline so it reads as a section
                 this.ctx.fillStyle = '#9ac4ff';
-                this.ctx.font = 'bold 13px Arial';
-                this.ctx.fillText('✦  ABILITIES', boxX + 18, boxY + 62);
+                this.ctx.font = 'bold 16px Arial';
+                this.ctx.fillText('✦  ABILITIES', boxX + 18, boxY + 70);
                 this.ctx.strokeStyle = 'rgba(154,196,255,0.35)';
                 this.ctx.lineWidth = 1;
                 this.ctx.beginPath();
-                this.ctx.moveTo(boxX + 18, boxY + 70);
-                this.ctx.lineTo(boxX + boxW - 18, boxY + 70);
+                this.ctx.moveTo(boxX + 18, boxY + 78);
+                this.ctx.lineTo(boxX + boxW - 18, boxY + 78);
                 this.ctx.stroke();
 
                 // Auto-fit: decide line height for ability rules based on how
-                // many abilities the unit has, so a Paladin's 4 entries still
-                // fit comfortably in the same sized box as a Squire's 2. With
-                // synergies included, the Archer can reach 7 entries — tier 3
-                // shrinks fonts further so everything fits in the fixed box.
+                // many abilities the unit has. With the notes box now 520 px
+                // tall, every tier can run bigger text than before. The
+                // "crammed" tier (8+ abilities, e.g. Archer) still shrinks
+                // a bit so all 9 entries still fit.
                 let abilCount = n.abilities.length;
+                let crammed = abilCount >= 8;
                 let dense = abilCount >= 6;
                 let mid   = abilCount >= 4;
-                let ruleFontPx = dense ? 11 : (mid ? 12 : 13);
-                let ruleLineH = dense ? 14 : (mid ? 17 : 19);
-                let nameFontPx = dense ? 13 : (mid ? 14 : 15);
-                let abilityGap = dense ? 7 : (mid ? 12 : 16);
-                let headerGap = dense ? 5 : (mid ? 8 : 10);
-                let rulePadL = 34;   // hanging indent for rule text
+                let ruleFontPx = crammed ? 13 : (dense ? 14 : (mid ? 15 : 16));
+                let ruleLineH  = crammed ? 17 : (dense ? 19 : (mid ? 21 : 23));
+                let nameFontPx = crammed ? 15 : (dense ? 16 : (mid ? 17 : 19));
+                // abilityGap must exceed (rule descender + next name ascender),
+                // roughly fontPx * 0.25 + fontPx * 0.75 = name fontPx + a bit,
+                // or lines overlap at the baselines. Old values were too tight.
+                let abilityGap = crammed ? 18 : (dense ? 22 : (mid ? 26 : 30));
+                let headerGap  = crammed ? 8  : (dense ? 10 : (mid ? 12 : 14));
+                let rulePadL = 36;   // hanging indent for rule text
 
-                let y = boxY + 92;
+                let y = boxY + 104;
                 for (let i = 0; i < n.abilities.length; i++) {
                     let a = n.abilities[i];
                     // Ability name (left)
@@ -8194,9 +8211,9 @@
 
                 // Formula footer pinned to the bottom of the box
                 this.ctx.fillStyle = '#9ac4ff';
-                this.ctx.font = 'bold 12px Arial';
+                this.ctx.font = 'bold 14px Arial';
                 this.ctx.fillText('🧮  Damage = max(1, Attack − Defense).  Pierced targets take half.',
-                    boxX + 18, boxY + boxH - 14);
+                    boxX + 18, boxY + boxH - 16);
             }
 
             // Crude word-wrapping for the abilities box.
@@ -8805,11 +8822,20 @@
                         this.ctx.fillText('unit\'s tile (marked HOLD) to stay put.', 14, UI_TOP + 133);
                         this.drawButton(game, 'plan_deselect', 14, UI_TOP + 148, 160, 34, '✕ Deselect', {color: '#7a3a3a'});
                     } else if (game.planStep === 'ATTACK') {
+                        let dugIn = u.type === 'Squire' && u.dugInTurns > 0;
                         this.ctx.fillStyle = '#ff8844';
                         this.ctx.font = 'bold 13px Arial';
-                        this.ctx.fillText('Step 2: Click a target / direction to attack', 14, UI_TOP + 115);
+                        if (dugIn) {
+                            this.ctx.fillText('🛡 Dug in — hold the line: click an adjacent enemy to strike, or Skip Attack.', 14, UI_TOP + 115);
+                        } else {
+                            this.ctx.fillText('Step 2: Click a target / direction to attack', 14, UI_TOP + 115);
+                        }
                         this.drawButton(game, 'plan_skip_attack', 14, UI_TOP + 130, 180, 36, 'Skip Attack', {color: '#555'});
-                        this.drawButton(game, 'plan_reset_move', 210, UI_TOP + 130, 140, 36, '← Redo Move', {color: '#5a5a8a'});
+                        // Dug-in Squires can't move — hide Redo Move so the
+                        // stance commitment stays locked.
+                        if (!dugIn) {
+                            this.drawButton(game, 'plan_reset_move', 210, UI_TOP + 130, 140, 36, '← Redo Move', {color: '#5a5a8a'});
+                        }
                         this.drawButton(game, 'plan_deselect', 360, UI_TOP + 130, 140, 36, '✕ Deselect', {color: '#7a3a3a'});
 
                         // Class-specific ability buttons (second row at UI_TOP + 174)
@@ -9635,6 +9661,9 @@
                 if (unit.archmageState === 'rainReady') return 'RAIN';
                 if (unit.archmageState === 'exhausted') return 'BLINK';
             }
+            // Dug-in Squires can't move — skip MOVE step and go straight to
+            // ATTACK. They hold the line and may strike an adjacent enemy.
+            if (unit.type === 'Squire' && unit.dugInTurns > 0) return 'ATTACK';
             return 'MOVE';
         }
 
@@ -9920,13 +9949,16 @@
                 return true;
             }
             if (key === 'plan_reset_move') {
-                if (game.selectedUnit) {
-                    game.selectedUnit.plannedR = null;
-                    game.selectedUnit.plannedC = null;
-                    game.selectedUnit.plannedTrap = null;
-                    game.selectedUnit.plannedFire = null;
-                    game.selectedUnit.plannedBeacon = null;
-                    game.selectedUnit.plannedAid = null;
+                let su = game.selectedUnit;
+                // Dug-in Squires can't break stance — ignore reset-move.
+                if (su && su.type === 'Squire' && su.dugInTurns > 0) return true;
+                if (su) {
+                    su.plannedR = null;
+                    su.plannedC = null;
+                    su.plannedTrap = null;
+                    su.plannedFire = null;
+                    su.plannedBeacon = null;
+                    su.plannedAid = null;
                     game.planStep = 'MOVE';
                 }
                 return true;
